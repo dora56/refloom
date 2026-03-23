@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/dora56/refloom/internal/db"
@@ -37,17 +36,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	query := args[0]
 
-	database, err := db.Open("")
+	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close()
 
-	embeddingModel := os.Getenv("REFLOOM_EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		embeddingModel = "nomic-embed-text"
-	}
-	embedClient := embedding.NewClient("http://localhost:11434", embeddingModel)
+	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 
 	engine := search.NewEngine(database, embedClient)
 
