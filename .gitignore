@@ -1,0 +1,24 @@
+# Books (copyrighted content)
+books/
+
+# SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python
+python/refloom_worker/.venv/
+__pycache__/
+*.pyc
+
+# Go
+/refloom
+/bin/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
