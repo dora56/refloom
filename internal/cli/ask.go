@@ -64,7 +64,13 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	// Build prompt and call LLM
 	system, user := citation.BuildPrompt(query, results)
 
-	provider := llm.NewClaude(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	var provider llm.Provider
+	switch cfg.LLMProvider {
+	case "claude-cli":
+		provider = llm.NewClaudeCLI(cfg.AnthropicModel)
+	default:
+		provider = llm.NewClaude(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	}
 	answer, err := provider.Generate(ctx, system, user)
 	if err != nil {
 		return fmt.Errorf("generate answer: %w", err)
