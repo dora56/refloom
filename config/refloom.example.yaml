@@ -1,0 +1,18 @@
+# Refloom configuration
+db_path: ~/.refloom/refloom.db
+python_path: python/refloom_worker/.venv/bin/python3
+
+# Ollama settings
+ollama_url: http://localhost:11434
+ollama_embedding_model: nomic-embed-text
+
+# LLM settings
+llm_provider: claude  # claude or ollama
+# anthropic_api_key: sk-ant-...  # or set ANTHROPIC_API_KEY env var
+
+# Chunking settings
+chunk_size: 500
+chunk_overlap: 100
+
+# Search settings
+search_limit: 10
