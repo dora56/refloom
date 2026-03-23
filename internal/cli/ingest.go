@@ -48,7 +48,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	}
 
 	// Open database
-	database, err := db.Open("")
+	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -59,12 +59,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	worker := extraction.NewWorker(pythonPath, workerDir)
 
 	// Setup embedding client
-	// TODO: make model configurable via config file
-	embeddingModel := os.Getenv("REFLOOM_EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		embeddingModel = "nomic-embed-text"
-	}
-	embedClient := embedding.NewClient("http://localhost:11434", embeddingModel)
+	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 	if err := embedClient.CheckHealth(ctx); err != nil {
 		return fmt.Errorf("ollama check: %w", err)
 	}

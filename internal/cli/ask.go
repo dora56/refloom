@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/dora56/refloom/internal/citation"
@@ -37,17 +36,13 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	query := args[0]
 
-	database, err := db.Open("")
+	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close()
 
-	embeddingModel := os.Getenv("REFLOOM_EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		embeddingModel = "nomic-embed-text"
-	}
-	embedClient := embedding.NewClient("http://localhost:11434", embeddingModel)
+	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 
 	// Search for relevant chunks
 	engine := search.NewEngine(database, embedClient)
@@ -69,7 +64,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	// Build prompt and call LLM
 	system, user := citation.BuildPrompt(query, results)
 
-	provider := llm.NewClaude("", "")
+	provider := llm.NewClaude(cfg.AnthropicAPIKey, cfg.AnthropicModel)
 	answer, err := provider.Generate(ctx, system, user)
 	if err != nil {
 		return fmt.Errorf("generate answer: %w", err)

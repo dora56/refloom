@@ -28,7 +28,7 @@ func init() {
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
-	database, err := db.Open("")
+	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

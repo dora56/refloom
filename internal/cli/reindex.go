@@ -33,7 +33,7 @@ func runReindex(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	database, err := db.Open("")
+	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -73,11 +73,7 @@ func rebuildFTS(database *db.DB) error {
 }
 
 func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
-	embeddingModel := os.Getenv("REFLOOM_EMBEDDING_MODEL")
-	if embeddingModel == "" {
-		embeddingModel = "nomic-embed-text"
-	}
-	embedClient := embedding.NewClient("http://localhost:11434", embeddingModel)
+	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 	if err := embedClient.CheckHealth(ctx); err != nil {
 		return err
 	}
