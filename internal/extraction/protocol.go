@@ -17,6 +17,7 @@ type Options struct {
 // Response is the JSON response from the Python worker.
 type Response struct {
 	Status   string        `json:"status"`
+	Quality  string        `json:"quality,omitempty"` // ok, ocr_required, extract_failed, text_corrupt
 	Error    string        `json:"error,omitempty"`
 	Details  string        `json:"details,omitempty"`
 	Book     BookInfo      `json:"book"`

@@ -124,7 +124,24 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	if err != nil {
 		return fmt.Errorf("extract: %w", err)
 	}
-	log.Info("extracted", "chapters", len(resp.Chapters), "chunks", len(resp.Chunks), "duration", time.Since(start).Round(time.Millisecond))
+	quality := resp.Quality
+	if quality == "" {
+		quality = "ok" // backward compat with workers that don't emit quality
+	}
+	log.Info("extracted", "chapters", len(resp.Chapters), "chunks", len(resp.Chunks), "quality", quality, "duration", time.Since(start).Round(time.Millisecond))
+
+	switch quality {
+	case "ocr_required":
+		fmt.Printf("  quality: %s — skipping (no extractable text)\n", quality)
+		database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
+		return nil
+	case "extract_failed":
+		fmt.Printf("  quality: %s — skipping\n", quality)
+		database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
+		return nil
+	case "text_corrupt":
+		fmt.Printf("  quality: %s — proceeding with warning (text may contain mojibake)\n", quality)
+	}
 
 	tx, err := database.Begin()
 	if err != nil {

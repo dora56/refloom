@@ -41,6 +41,10 @@ def main():
             from refloom_worker.epub_extractor import extract_epub
             result = extract_epub(path)
 
+        # Classify extraction quality
+        from refloom_worker.quality import classify_extraction
+        quality = classify_extraction(result["pages"])
+
         # Chunk the extracted pages
         from refloom_worker.chunker import chunk_pages
         chunks = chunk_pages(
@@ -53,6 +57,7 @@ def main():
         # Build response (exclude raw pages to keep response smaller)
         response = {
             "status": "ok",
+            "quality": quality,
             "book": result["book"],
             "chapters": result["chapters"],
             "chunks": chunks,
