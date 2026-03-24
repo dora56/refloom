@@ -7,15 +7,18 @@ import (
 	"github.com/dora56/refloom/internal/search"
 )
 
-// MaxQuoteLen is the maximum length of a direct quote in characters.
-const MaxQuoteLen = 200
+// PromptOptions controls prompt budget enforcement.
+type PromptOptions struct {
+	Budget   int // max total chars for the excerpt section (0 = no limit)
+	PerChunk int // max chars per chunk body (0 = no limit)
+}
 
-// MaxChunkPreview is the maximum chunk text sent to the LLM.
-const MaxChunkPreview = 300
+// DefaultPromptOptions returns default budget values.
+func DefaultPromptOptions() PromptOptions {
+	return PromptOptions{Budget: 3000, PerChunk: 500}
+}
 
-// BuildPrompt constructs the LLM prompt from search results and a query.
-func BuildPrompt(query string, results []search.Result) (system, user string) {
-	system = `You are a reading assistant. The user has a question about books in their personal library.
+const systemPrompt = `You are a reading assistant. The user has a question about books in their personal library.
 Based on the excerpts provided below, write a concise summary that answers the question.
 
 Rules:
@@ -25,32 +28,56 @@ Rules:
 - If the excerpts do not contain enough information, say so honestly.
 - Respond in the same language as the user's question.`
 
+// BuildPrompt constructs the LLM prompt with default budget.
+func BuildPrompt(query string, results []search.Result) (system, user string) {
+	return BuildPromptWithBudget(query, results, DefaultPromptOptions())
+}
+
+// BuildPromptWithBudget constructs the LLM prompt with explicit budget control.
+// Chunks are capped at opts.PerChunk chars each. If the total excerpt section
+// would exceed opts.Budget, trailing results are dropped.
+func BuildPromptWithBudget(query string, results []search.Result, opts PromptOptions) (system, user string) {
 	var sb strings.Builder
 	sb.WriteString("Excerpts:\n---\n")
+	totalLen := 0
+
 	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("[%d] ", i+1))
+		// Build this entry
+		var entry strings.Builder
+		entry.WriteString(fmt.Sprintf("[%d] ", i+1))
 		if r.Book != nil {
-			sb.WriteString(fmt.Sprintf("Book: %s", r.Book.Title))
+			entry.WriteString(fmt.Sprintf("Book: %s", r.Book.Title))
 		}
 		if r.Chapter != nil {
-			sb.WriteString(fmt.Sprintf(" | Chapter: %s", r.Chapter.Title))
+			entry.WriteString(fmt.Sprintf(" | Chapter: %s", r.Chapter.Title))
 		}
 		if r.Chunk != nil && r.Chunk.PageStart.Valid && r.Chunk.PageEnd.Valid {
-			sb.WriteString(fmt.Sprintf(" | Pages: %d-%d", r.Chunk.PageStart.Int64, r.Chunk.PageEnd.Int64))
+			entry.WriteString(fmt.Sprintf(" | Pages: %d-%d", r.Chunk.PageStart.Int64, r.Chunk.PageEnd.Int64))
 		}
-		sb.WriteString("\n")
+		entry.WriteString("\n")
 		if r.Chunk != nil {
 			text := r.Chunk.Body
-			if len(text) > MaxChunkPreview {
-				text = text[:MaxChunkPreview] + "..."
+			if opts.PerChunk > 0 && len(text) > opts.PerChunk {
+				text = text[:opts.PerChunk] + "..."
 			}
-			sb.WriteString(text)
+			entry.WriteString(text)
 		}
-		sb.WriteString("\n---\n")
+		entry.WriteString("\n---\n")
+
+		entryStr := entry.String()
+
+		// Check budget
+		if opts.Budget > 0 && totalLen+len(entryStr) > opts.Budget && i > 0 {
+			break // drop remaining results
+		}
+
+		sb.WriteString(entryStr)
+		totalLen += len(entryStr)
 	}
+
 	sb.WriteString(fmt.Sprintf("\nQuestion: %s", query))
 
-	return system, sb.String()
+	return systemPrompt, sb.String()
 }
 
 // FormatSources formats citation sources for display.

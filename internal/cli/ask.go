@@ -71,7 +71,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build prompt and call LLM
-	system, user := citation.BuildPrompt(query, results)
+	promptOpts := citation.PromptOptions{
+		Budget:   cfg.PromptBudget,
+		PerChunk: cfg.PromptChunkLimit,
+	}
+	system, user := citation.BuildPromptWithBudget(query, results, promptOpts)
 
 	var provider llm.Provider
 	switch cfg.LLMProvider {

@@ -29,6 +29,8 @@ type Config struct {
 	ChunkSize        int      `yaml:"chunk_size"`
 	ChunkOverlap     int      `yaml:"chunk_overlap"`
 	SearchLimit      int      `yaml:"search_limit"`
+	PromptBudget     int      `yaml:"prompt_budget"`     // max total chars for LLM excerpt section
+	PromptChunkLimit int      `yaml:"prompt_chunk_limit"` // max chars per chunk in LLM prompt
 	Timeouts         Timeouts `yaml:"timeouts"`
 }
 
@@ -44,6 +46,8 @@ func DefaultConfig() *Config {
 		ChunkSize:        500,
 		ChunkOverlap:     100,
 		SearchLimit:      10,
+		PromptBudget:     3000,
+		PromptChunkLimit: 500,
 		Timeouts: Timeouts{
 			Ingest:        30 * time.Minute,
 			Search:        30 * time.Second,
