@@ -2,17 +2,19 @@ package db
 
 import (
 	"database/sql"
-	_ "embed"
+	"embed"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-//go:embed schema.sql
-var schemaSQL string
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // DB wraps a SQLite database connection with Refloom-specific operations.
 type DB struct {
@@ -34,7 +36,6 @@ func Open(path string) (*DB, error) {
 		path = filepath.Join(home, ".refloom", "refloom.db")
 	}
 
-	// Ensure parent directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
@@ -60,10 +61,54 @@ func (db *DB) migrate() error {
 	if err := db.QueryRow("SELECT vec_version()").Scan(&vecVersion); err != nil {
 		return fmt.Errorf("sqlite-vec not available: %w", err)
 	}
+	slog.Debug("sqlite-vec available", "version", vecVersion)
 
-	_, err := db.Exec(schemaSQL)
+	// Create schema_version table
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
+		version  INTEGER PRIMARY KEY,
+		applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`)
 	if err != nil {
-		return fmt.Errorf("exec schema: %w", err)
+		return fmt.Errorf("create schema_version: %w", err)
 	}
+
+	// Get current version
+	var currentVersion int
+	err = db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&currentVersion)
+	if err != nil {
+		return fmt.Errorf("get schema version: %w", err)
+	}
+
+	// List migration files
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		return fmt.Errorf("read migrations dir: %w", err)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	for i, entry := range entries {
+		version := i + 1
+		if version <= currentVersion {
+			continue
+		}
+
+		data, err := migrationsFS.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
+		}
+
+		slog.Info("applying migration", "version", version, "file", entry.Name())
+		if _, err := db.Exec(string(data)); err != nil {
+			return fmt.Errorf("apply migration %s: %w", entry.Name(), err)
+		}
+
+		if _, err := db.Exec("INSERT INTO schema_version (version) VALUES (?)", version); err != nil {
+			return fmt.Errorf("record migration %d: %w", version, err)
+		}
+	}
+
 	return nil
 }

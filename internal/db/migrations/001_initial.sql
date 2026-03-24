@@ -1,11 +1,4 @@
--- Refloom SQLite Schema
-
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
--- ============================================================
--- Core tables
--- ============================================================
+-- Migration 001: Initial schema
 
 CREATE TABLE IF NOT EXISTS book (
     book_id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,10 +41,6 @@ CREATE TABLE IF NOT EXISTS chunk (
 CREATE INDEX IF NOT EXISTS idx_chunk_book    ON chunk(book_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_chapter ON chunk(chapter_id);
 
--- ============================================================
--- Full-Text Search (FTS5)
--- ============================================================
-
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     heading,
     body,
@@ -77,18 +66,10 @@ CREATE TRIGGER IF NOT EXISTS chunk_au AFTER UPDATE ON chunk BEGIN
     VALUES (new.chunk_id, new.heading, new.body);
 END;
 
--- ============================================================
--- Vector Search (sqlite-vec)
--- ============================================================
-
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
     chunk_id INTEGER PRIMARY KEY,
     embedding float[768]
 );
-
--- ============================================================
--- Processing log
--- ============================================================
 
 CREATE TABLE IF NOT EXISTS ingest_log (
     log_id     INTEGER PRIMARY KEY AUTOINCREMENT,

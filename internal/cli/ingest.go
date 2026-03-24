@@ -101,6 +101,16 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 		return fmt.Errorf("hash: %w", err)
 	}
 
+	// Check for duplicate by file hash (same content, different path)
+	if existing == nil {
+		dupByHash, err := database.GetBookByHash(hash)
+		if err == nil && dupByHash != nil && !ingestForce {
+			log.Info("skipped (same file already ingested at different path)",
+				"existing_path", dupByHash.SourcePath, "book_id", dupByHash.BookID)
+			return nil
+		}
+	}
+
 	format := detectFormat(absPath)
 	if format == "" {
 		return fmt.Errorf("unsupported file format")
