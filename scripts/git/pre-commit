@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: run lint only on staged files
+
+STAGED_GO=$(git diff --cached --name-only --diff-filter=ACM -- '*.go' || true)
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM -- '*.py' || true)
+
+errors=0
+
+# Go: golangci-lint on staged files
+if [ -n "$STAGED_GO" ]; then
+  echo "==> golangci-lint (staged Go files)"
+  if ! golangci-lint run --build-tags fts5 --new-from-rev=HEAD 2>&1; then
+    errors=1
+  fi
+
+  echo "==> go fix check"
+  diff=$(go fix -diff -tags fts5 ./... 2>&1 || true)
+  if [ -n "$diff" ]; then
+    echo "go fix has pending modernizations:"
+    echo "$diff"
+    echo "Run 'go fix -tags fts5 ./...' to apply."
+    errors=1
+  fi
+fi
+
+# Python: ruff on staged files
+if [ -n "$STAGED_PY" ]; then
+  echo "==> ruff (staged Python files)"
+  if ! (cd python/refloom_worker && uv run --group dev ruff check $STAGED_PY) 2>&1; then
+    errors=1
+  fi
+fi
+
+if [ $errors -ne 0 ]; then
+  echo ""
+  echo "Pre-commit checks failed. Fix the issues above or use --no-verify to skip."
+  exit 1
+fi

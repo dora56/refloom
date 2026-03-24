@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Commit message hook: validate format
+# Expected: verb-first, English (e.g. "Add feature X", "Fix bug in Y")
+
+MSG_FILE="$1"
+FIRST_LINE=$(head -1 "$MSG_FILE")
+
+# Skip merge commits
+if echo "$FIRST_LINE" | grep -qE '^Merge '; then
+  exit 0
+fi
+
+# Check: starts with uppercase verb
+if ! echo "$FIRST_LINE" | grep -qE '^[A-Z][a-z]+ '; then
+  echo "Commit message must start with a capitalized verb (e.g. 'Add', 'Fix', 'Update')."
+  echo "Got: $FIRST_LINE"
+  exit 1
+fi
+
+# Check: not too long
+if [ ${#FIRST_LINE} -gt 72 ]; then
+  echo "Commit message first line must be <= 72 chars (got ${#FIRST_LINE})."
+  exit 1
+fi

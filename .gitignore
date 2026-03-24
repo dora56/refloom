@@ -33,3 +33,4 @@ validation-results/
 .idea/
 .vscode/
 _build/
+.claude/.pending-review/

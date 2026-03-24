@@ -1,4 +1,4 @@
-.PHONY: build test clean python-setup lint lint-python test-python fix-check ci dist validate changelog
+.PHONY: build test clean python-setup lint lint-python test-python fix-check ci dist validate changelog setup-hooks
 
 BINARY := refloom
 BUILD_DIR := bin
@@ -45,6 +45,11 @@ fix-check:
 	fi
 
 ci: lint fix-check test lint-python test-python
+
+setup-hooks:
+	ln -sf ../../scripts/git/pre-commit .git/hooks/pre-commit
+	ln -sf ../../scripts/git/commit-msg .git/hooks/commit-msg
+	@echo "Git hooks installed."
 
 changelog:
 	git-cliff -o CHANGELOG.md
