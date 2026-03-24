@@ -53,7 +53,7 @@ func DefaultConfig() *Config {
 			Search:        30 * time.Second,
 			Ask:           60 * time.Second,
 			Reindex:       30 * time.Minute,
-			WorkerPerFile: 5 * time.Minute,
+			WorkerPerFile: 20 * time.Minute,
 		},
 	}
 }

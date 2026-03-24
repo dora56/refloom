@@ -6,6 +6,8 @@ dependencies = [
     "PyMuPDF>=1.25",
     "ebooklib>=0.18",
     "beautifulsoup4>=4.13",
+    "pyobjc-framework-Vision>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
 ]
 
 [tool.pytest.ini_options]

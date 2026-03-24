@@ -1,4 +1,6 @@
-"""PDF extraction using PyMuPDF (fitz)."""
+"""PDF extraction using PyMuPDF (fitz) with optional Vision Framework OCR."""
+
+import sys
 
 import fitz
 
@@ -26,11 +28,19 @@ def extract_pdf(path: str) -> dict:
     if not chapters:
         chapters = [{"title": "全体", "order": 0, "page_start": 1, "page_end": len(doc)}]
 
-    # Extract text page by page
+    # Extract text page by page, with OCR fallback for image pages
+    ocr_available = _check_ocr_available()
     pages = []
     for i in range(len(doc)):
         page = doc[i]
         text = page.get_text("text")
+
+        # If page has no text and OCR is available, try Vision OCR
+        if not text.strip() and ocr_available:
+            import sys as _sys
+            print(f"  OCR page {i + 1}/{len(doc)}...", file=_sys.stderr, flush=True)
+            text = _ocr_page(page)
+
         pages.append({"page_num": i + 1, "text": text})
 
     doc.close()
@@ -79,3 +89,32 @@ def _build_chapters(toc: list, total_pages: int) -> list:
         })
 
     return chapters
+
+
+def _check_ocr_available() -> bool:
+    """Check if Vision Framework OCR is available."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from refloom_worker.ocr_vision import is_available
+        return is_available()
+    except ImportError:
+        return False
+
+
+def _ocr_page(page) -> str:
+    """OCR a single PDF page using Vision Framework.
+
+    Renders the page to a high-resolution PNG, then passes to Vision OCR.
+    """
+    try:
+        from refloom_worker.ocr_vision import recognize_text
+
+        # Render at 2x zoom (balance between OCR accuracy and speed)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        image_data = pix.tobytes(output="png")
+
+        texts = recognize_text(image_data)
+        return "\n".join(texts)
+    except Exception:
+        return ""
