@@ -1,0 +1,74 @@
+[
+  {
+    "id": "q01",
+    "category": "single-book",
+    "query": "ドメインモデリング 値オブジェクト",
+    "expected_books": ["データモデリングでドメインを駆動する"]
+  },
+  {
+    "id": "q02",
+    "category": "single-book",
+    "query": "本を書くときに文章をわかりやすくするコツ",
+    "expected_books": ["技術者のためのテクニカルライティング入門講座"]
+  },
+  {
+    "id": "q03",
+    "category": "single-book",
+    "query": "ソフトウェア設計におけるデータの扱い方",
+    "expected_books": ["データモデリングでドメインを駆動する"]
+  },
+  {
+    "id": "q04",
+    "category": "single-book",
+    "query": "技術文書の書き方のベストプラクティス",
+    "expected_books": ["技術者のためのテクニカルライティング入門講座"]
+  },
+  {
+    "id": "q05",
+    "category": "single-book",
+    "query": "GitLabのドキュメント文化の特徴",
+    "expected_books": ["GitLabに学ぶ"]
+  },
+  {
+    "id": "q06",
+    "category": "single-book",
+    "query": "関数型プログラミングでドメインを表現する方法",
+    "expected_books": ["関数型ドメインモデリング"]
+  },
+  {
+    "id": "q07",
+    "category": "single-book",
+    "query": "読み手に伝わる文章構成",
+    "expected_books": ["技術者のためのテクニカルライティング入門講座"]
+  },
+  {
+    "id": "q08",
+    "category": "cross-book",
+    "query": "ドメインモデリングと関数型プログラミングの共通点",
+    "expected_books": ["データモデリングでドメインを駆動する", "関数型ドメインモデリング"]
+  },
+  {
+    "id": "q09",
+    "category": "cross-book",
+    "query": "技術文書の書き方とドキュメント運用を比較したい",
+    "expected_books": ["技術者のためのテクニカルライティング入門講座", "GitLabに学ぶ"]
+  },
+  {
+    "id": "q10",
+    "category": "cross-book",
+    "query": "文章品質とドキュメント運用の共通点は何か",
+    "expected_books": ["技術者のためのテクニカルライティング入門講座", "GitLabに学ぶ"]
+  },
+  {
+    "id": "q11",
+    "category": "cross-book",
+    "query": "境界づけられたコンテキストと型による設計の違い",
+    "expected_books": ["データモデリングでドメインを駆動する", "関数型ドメインモデリング"]
+  },
+  {
+    "id": "q12",
+    "category": "conceptual",
+    "query": "エンジニア向けの読みやすい文章を書くコツ",
+    "expected_books": ["技術者のためのテクニカルライティング入門講座"]
+  }
+]

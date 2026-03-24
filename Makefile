@@ -1,4 +1,4 @@
-.PHONY: build test clean python-setup lint dist
+.PHONY: build test clean python-setup lint dist validate
 
 BINARY := refloom
 BUILD_DIR := bin
@@ -28,6 +28,9 @@ python-setup:
 
 lint:
 	CGO_ENABLED=$(CGO_ENABLED) go vet -tags "$(GO_TAGS)" ./...
+
+validate: build
+	./scripts/validate_refloom.sh
 
 dist: build
 	rm -rf $(DIST_DIR)
