@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
 // Client calls the Ollama embedding API.
 type Client struct {
-	BaseURL string // e.g., http://localhost:11434
-	Model   string // e.g., nomic-embed-text
+	BaseURL string
+	Model   string
 }
 
 // NewClient creates a new embedding client.
@@ -51,7 +52,8 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama returned %d: %s", resp.StatusCode, string(respBody))
+		slog.Error("ollama error response", "status", resp.StatusCode, "body", string(respBody))
+		return nil, fmt.Errorf("ollama returned %d", resp.StatusCode)
 	}
 
 	var result embeddingResponse
@@ -63,7 +65,6 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, fmt.Errorf("empty embedding returned")
 	}
 
-	// Convert float64 to float32
 	f64 := result.Embeddings[0]
 	f32 := make([]float32, len(f64))
 	for i, v := range f64 {
@@ -74,6 +75,8 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 
 // CheckHealth verifies Ollama is running and the model is available.
 func (c *Client) CheckHealth(ctx context.Context) error {
+	slog.Debug("checking ollama health", "url", c.BaseURL, "model", c.Model)
+
 	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/api/tags", nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
@@ -96,6 +99,7 @@ func (c *Client) CheckHealth(ctx context.Context) error {
 
 	for _, m := range tags.Models {
 		if m.Name == c.Model || m.Name == c.Model+":latest" {
+			slog.Debug("ollama health OK", "model", m.Name)
 			return nil
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +39,6 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// Find book files
 	files, err := findBookFiles(args[0])
 	if err != nil {
 		return fmt.Errorf("find files: %w", err)
@@ -46,29 +46,27 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("no PDF/EPUB files found at %s", args[0])
 	}
+	slog.Info("found book files", "count", len(files))
 
-	// Open database
 	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close()
 
-	// Setup Python worker
 	workerDir, pythonPath := findWorkerPaths()
+	slog.Debug("python worker", "dir", workerDir, "python", pythonPath)
 	worker := extraction.NewWorker(pythonPath, workerDir)
 
-	// Setup embedding client
 	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 	if err := embedClient.CheckHealth(ctx); err != nil {
 		return fmt.Errorf("ollama check: %w", err)
 	}
 
-	// Process each file
 	for i, file := range files {
 		fmt.Printf("[%d/%d] Processing %s...\n", i+1, len(files), filepath.Base(file))
 		if err := ingestFile(ctx, database, worker, embedClient, file); err != nil {
-			fmt.Fprintf(os.Stderr, "  Error: %v\n", err)
+			slog.Error("ingest failed", "file", filepath.Base(file), "error", err)
 			continue
 		}
 	}
@@ -81,50 +79,47 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	if err != nil {
 		return err
 	}
+	log := slog.With("path", filepath.Base(absPath))
 
-	// Check if already ingested
 	existing, err := database.GetBookByPath(absPath)
 	if err != nil {
 		return err
 	}
 	if existing != nil && !ingestForce {
-		fmt.Printf("  Skipped (already ingested, use --force to re-ingest)\n")
+		log.Info("skipped (already ingested, use --force to re-ingest)")
 		return nil
 	}
 	if existing != nil && ingestForce {
+		log.Info("re-ingesting (--force)", "book_id", existing.BookID)
 		if err := database.DeleteBook(existing.BookID); err != nil {
 			return fmt.Errorf("delete existing: %w", err)
 		}
 	}
 
-	// Compute file hash
 	hash, err := fileHash(absPath)
 	if err != nil {
 		return fmt.Errorf("hash: %w", err)
 	}
 
-	// Determine format
 	format := detectFormat(absPath)
 	if format == "" {
 		return fmt.Errorf("unsupported file format")
 	}
 
-	// Extract via Python worker
-	fmt.Printf("  Extracting...\n")
+	log.Info("extracting", "format", format)
+	start := time.Now()
 	resp, err := worker.Extract(ctx, absPath, format, 500, 100)
 	if err != nil {
 		return fmt.Errorf("extract: %w", err)
 	}
-	fmt.Printf("  Extracted: %d chapters, %d chunks\n", len(resp.Chapters), len(resp.Chunks))
+	log.Info("extracted", "chapters", len(resp.Chapters), "chunks", len(resp.Chunks), "duration", time.Since(start).Round(time.Millisecond))
 
-	// Begin transaction
 	tx, err := database.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Insert book
 	tagsJSON := "[]"
 	if len(ingestTags) > 0 {
 		tagsJSON = `["` + strings.Join(ingestTags, `","`) + `"]`
@@ -138,7 +133,6 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	}
 	bookID, _ := bookRes.LastInsertId()
 
-	// Insert chapters and build order->ID map
 	chapterIDMap := make(map[int]int64)
 	for _, ch := range resp.Chapters {
 		var pageStart, pageEnd sql.NullInt64
@@ -159,11 +153,11 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 		chapterIDMap[ch.Order] = chID
 	}
 
-	// Insert chunks
 	chunkIDs := make([]int64, 0, len(resp.Chunks))
 	for _, ck := range resp.Chunks {
 		chapterID, ok := chapterIDMap[ck.ChapterOrder]
 		if !ok {
+			log.Warn("chunk references unknown chapter", "chapter_order", ck.ChapterOrder)
 			continue
 		}
 		var pageStart, pageEnd sql.NullInt64
@@ -185,29 +179,37 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 		chunkIDs = append(chunkIDs, id)
 	}
 
-	// Commit metadata
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 
-	// Generate embeddings (outside transaction for progress reporting)
-	fmt.Printf("  Generating embeddings for %d chunks...\n", len(chunkIDs))
+	log.Info("generating embeddings", "chunks", len(chunkIDs))
+	embedStart := time.Now()
+	embedFails := 0
 	for i, chunkID := range chunkIDs {
-		if i > 0 && i%50 == 0 {
-			fmt.Printf("    %d/%d\n", i, len(chunkIDs))
+		if i > 0 && i%100 == 0 {
+			log.Info("embedding progress", "done", i, "total", len(chunkIDs))
 		}
 		chunkBody := resp.Chunks[i].Body
 		emb, err := embedClient.Embed(ctx, chunkBody)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: embedding failed for chunk %d: %v\n", chunkID, err)
+			slog.Warn("embedding failed", "chunk_id", chunkID, "error", err)
+			embedFails++
 			continue
 		}
 		if err := database.InsertEmbedding(chunkID, emb); err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: save embedding failed for chunk %d: %v\n", chunkID, err)
+			slog.Warn("save embedding failed", "chunk_id", chunkID, "error", err)
+			embedFails++
 		}
 	}
 
-	fmt.Printf("  Done: \"%s\" — %d chapters, %d chunks\n", resp.Book.Title, len(resp.Chapters), len(chunkIDs))
+	log.Info("done",
+		"title", resp.Book.Title,
+		"chapters", len(resp.Chapters),
+		"chunks", len(chunkIDs),
+		"embed_fails", embedFails,
+		"embed_duration", time.Since(embedStart).Round(time.Millisecond),
+	)
 	return nil
 }
 
@@ -260,7 +262,15 @@ func fileHash(path string) (string, error) {
 }
 
 func findWorkerPaths() (workerDir, pythonPath string) {
-	// Allow override via env
+	if cfg.PythonWorkerDir != "" {
+		venvPython := filepath.Join(cfg.PythonWorkerDir, "refloom_worker", ".venv", "bin", "python3")
+		if _, err := os.Stat(venvPython); err == nil {
+			return cfg.PythonWorkerDir, venvPython
+		}
+		slog.Warn("configured worker dir has no venv", "dir", cfg.PythonWorkerDir)
+		return cfg.PythonWorkerDir, "python3"
+	}
+
 	if envDir := os.Getenv("REFLOOM_WORKER_DIR"); envDir != "" {
 		venvPython := filepath.Join(envDir, "refloom_worker", ".venv", "bin", "python3")
 		if _, err := os.Stat(venvPython); err == nil {
@@ -269,7 +279,6 @@ func findWorkerPaths() (workerDir, pythonPath string) {
 		return envDir, "python3"
 	}
 
-	// Try relative to executable
 	exePath, _ := os.Executable()
 	exeDir := filepath.Dir(exePath)
 
@@ -285,10 +294,11 @@ func findWorkerPaths() (workerDir, pythonPath string) {
 		absDir, _ := filepath.Abs(dir)
 		venvPython := filepath.Join(absDir, "refloom_worker", ".venv", "bin", "python3")
 		if _, err := os.Stat(venvPython); err == nil {
+			slog.Debug("found python worker", "dir", absDir)
 			return absDir, venvPython
 		}
 	}
 
-	// Fallback: system python
+	slog.Warn("python worker venv not found, falling back to system python")
 	return "python", "python3"
 }

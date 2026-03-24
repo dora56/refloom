@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"log/slog"
+	"os"
+
 	"github.com/dora56/refloom/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +19,7 @@ var rootCmd = &cobra.Command{
 	Long:  "Refloom is a personal, local reading support RAG tool for PDF/EPUB books.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		cfg = config.Load()
+		initLogger()
 	},
 }
 
@@ -30,4 +34,13 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+func initLogger() {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
 }

@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"log/slog"
 	"time"
 
 	"github.com/dora56/refloom/internal/db"
@@ -39,7 +39,6 @@ func runReindex(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	// Default: both
 	doFTS := !reindexEmbedding || reindexFTS
 	doEmb := !reindexFTS || reindexEmbedding
 
@@ -55,20 +54,20 @@ func runReindex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("Reindex complete.")
+	slog.Info("reindex complete")
 	return nil
 }
 
 func rebuildFTS(database *db.DB) error {
-	fmt.Println("Rebuilding FTS index...")
+	slog.Info("rebuilding FTS index")
+	start := time.Now()
 
-	// Rebuild content sync
 	_, err := database.Exec("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')")
 	if err != nil {
 		return fmt.Errorf("rebuild fts: %w", err)
 	}
 
-	fmt.Println("  FTS index rebuilt.")
+	slog.Info("FTS index rebuilt", "duration", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
@@ -78,39 +77,50 @@ func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
 		return err
 	}
 
-	// Get chunks to reindex
 	var chunks []*db.Chunk
+	var err error
 	if reindexBookID > 0 {
-		chunks, _ = database.GetChunksByBook(reindexBookID)
+		chunks, err = database.GetChunksByBook(reindexBookID)
+		if err != nil {
+			return fmt.Errorf("get chunks for book %d: %w", reindexBookID, err)
+		}
 	} else {
-		// Get all books, then all chunks
-		books, _ := database.ListBooks()
+		books, err := database.ListBooks()
+		if err != nil {
+			return fmt.Errorf("list books: %w", err)
+		}
 		for _, b := range books {
-			bookChunks, _ := database.GetChunksByBook(b.BookID)
+			bookChunks, err := database.GetChunksByBook(b.BookID)
+			if err != nil {
+				slog.Warn("failed to get chunks", "book_id", b.BookID, "error", err)
+				continue
+			}
 			chunks = append(chunks, bookChunks...)
 		}
 	}
 
-	fmt.Printf("  Regenerating embeddings for %d chunks...\n", len(chunks))
+	slog.Info("regenerating embeddings", "chunks", len(chunks))
+	start := time.Now()
+	fails := 0
 	for i, chunk := range chunks {
-		if i > 0 && i%50 == 0 {
-			fmt.Printf("    %d/%d\n", i, len(chunks))
+		if i > 0 && i%100 == 0 {
+			slog.Info("embedding progress", "done", i, "total", len(chunks))
 		}
 
-		// Delete existing embedding
 		database.DeleteEmbedding(chunk.ChunkID)
 
-		// Generate new embedding
 		emb, err := embedClient.Embed(ctx, chunk.Body)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: embedding failed for chunk %d: %v\n", chunk.ChunkID, err)
+			slog.Warn("embedding failed", "chunk_id", chunk.ChunkID, "error", err)
+			fails++
 			continue
 		}
 		if err := database.InsertEmbedding(chunk.ChunkID, emb); err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: save embedding failed for chunk %d: %v\n", chunk.ChunkID, err)
+			slog.Warn("save embedding failed", "chunk_id", chunk.ChunkID, "error", err)
+			fails++
 		}
 	}
 
-	fmt.Printf("  Embeddings regenerated: %d chunks\n", len(chunks))
+	slog.Info("embeddings regenerated", "total", len(chunks), "fails", fails, "duration", time.Since(start).Round(time.Millisecond))
 	return nil
 }
