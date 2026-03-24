@@ -70,15 +70,42 @@ func runReindex(cmd *cobra.Command, args []string) error {
 }
 
 func rebuildFTS(database *db.DB) error {
-	slog.Info("rebuilding FTS index")
+	slog.Info("rebuilding FTS indexes")
 	start := time.Now()
 
+	// Rebuild trigram FTS
 	_, err := database.Exec("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')")
 	if err != nil {
-		return fmt.Errorf("rebuild fts: %w", err)
+		return fmt.Errorf("rebuild fts trigram: %w", err)
 	}
 
-	slog.Info("FTS index rebuilt", "duration", time.Since(start).Round(time.Millisecond))
+	// Rebuild segmented FTS
+	slog.Info("rebuilding segmented FTS index")
+	if _, err := database.Exec("DELETE FROM chunk_fts_seg"); err != nil {
+		return fmt.Errorf("clear fts_seg: %w", err)
+	}
+
+	rows, err := database.Query("SELECT chunk_id, heading, body FROM chunk ORDER BY chunk_id")
+	if err != nil {
+		return fmt.Errorf("query chunks for fts_seg: %w", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var chunkID int64
+		var heading, body string
+		if err := rows.Scan(&chunkID, &heading, &body); err != nil {
+			return fmt.Errorf("scan chunk: %w", err)
+		}
+		if err := database.InsertSegmentedFTS(chunkID, heading, body); err != nil {
+			slog.Warn("fts_seg insert failed", "chunk_id", chunkID, "error", err)
+			continue
+		}
+		count++
+	}
+
+	slog.Info("FTS indexes rebuilt", "segmented_chunks", count, "duration", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 

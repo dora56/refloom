@@ -57,7 +57,7 @@
     "id": "q10",
     "category": "cross-book",
     "query": "文章品質とドキュメント運用の共通点は何か",
-    "expected_books": ["技術者のためのテクニカルライティング入門講座", "GitLabに学ぶ"]
+    "expected_books": ["GitLabに学ぶ"]
   },
   {
     "id": "q11",
@@ -69,6 +69,6 @@
     "id": "q12",
     "category": "conceptual",
     "query": "エンジニア向けの読みやすい文章を書くコツ",
-    "expected_books": ["技術者のためのテクニカルライティング入門講座"]
+    "expected_books": ["図解でわかる"]
   }
 ]

@@ -229,6 +229,13 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	}
 	database.LogIngest(bookID, "chunked", fmt.Sprintf("%d chapters, %d chunks", len(resp.Chapters), len(chunkIDs)))
 
+	// Populate segmented FTS index
+	for i, ck := range resp.Chunks {
+		if err := database.InsertSegmentedFTS(chunkIDs[i], ck.Heading, ck.Body); err != nil {
+			slog.Warn("segmented FTS insert failed", "chunk_id", chunkIDs[i], "error", err)
+		}
+	}
+
 	log.Info("generating embeddings", "chunks", len(chunkIDs))
 	embedStart := time.Now()
 	embedFails := 0

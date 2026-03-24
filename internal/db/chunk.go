@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 )
 
 // Chunk represents a chunk record.
@@ -78,31 +79,79 @@ func (db *DB) CountChunksByBook(bookID int64) (int, error) {
 	return count, err
 }
 
-// SearchFTS performs a full-text search and returns matching chunk IDs with BM25 scores.
+// SearchFTS performs a full-text search using both segmented and trigram FTS tables,
+// merging results by best score per chunk.
 func (db *DB) SearchFTS(query string, limit int, bookID *int64) ([]SearchResult, error) {
+	// Segmented search (morphological)
+	segQuery := SegmentQuery(query)
+	segResults, _ := db.searchFTSTable("chunk_fts_seg", segQuery, limit, bookID)
+
+	// Trigram search
+	triResults, _ := db.searchFTSTable("chunk_fts", query, limit, bookID)
+
+	if len(segResults) == 0 && len(triResults) == 0 {
+		return nil, fmt.Errorf("no FTS results from either table")
+	}
+
+	// Merge: keep best (lowest BM25) score per chunkID
+	best := make(map[int64]float64)
+	for _, r := range segResults {
+		best[r.ChunkID] = r.Score
+	}
+	for _, r := range triResults {
+		if existing, ok := best[r.ChunkID]; !ok || r.Score < existing {
+			best[r.ChunkID] = r.Score
+		}
+	}
+
+	// Sort by score ascending (BM25: lower = better)
+	type entry struct {
+		id    int64
+		score float64
+	}
+	entries := make([]entry, 0, len(best))
+	for id, s := range best {
+		entries = append(entries, entry{id, s})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].score < entries[j].score
+	})
+
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+
+	results := make([]SearchResult, len(entries))
+	for i, e := range entries {
+		results[i] = SearchResult{ChunkID: e.id, Score: e.score}
+	}
+	return results, nil
+}
+
+func (db *DB) searchFTSTable(table, query string, limit int, bookID *int64) ([]SearchResult, error) {
 	var rows *sql.Rows
 	var err error
 
 	if bookID != nil {
 		rows, err = db.Query(
-			`SELECT c.chunk_id, bm25(chunk_fts) as score
-			 FROM chunk_fts
-			 JOIN chunk c ON c.chunk_id = chunk_fts.rowid
-			 WHERE chunk_fts MATCH ? AND c.book_id = ?
+			fmt.Sprintf(`SELECT c.chunk_id, bm25(%s) as score
+			 FROM %s
+			 JOIN chunk c ON c.chunk_id = %s.rowid
+			 WHERE %s MATCH ? AND c.book_id = ?
 			 ORDER BY score
-			 LIMIT ?`, query, *bookID, limit,
+			 LIMIT ?`, table, table, table, table), query, *bookID, limit,
 		)
 	} else {
 		rows, err = db.Query(
-			`SELECT chunk_fts.rowid as chunk_id, bm25(chunk_fts) as score
-			 FROM chunk_fts
-			 WHERE chunk_fts MATCH ?
+			fmt.Sprintf(`SELECT %s.rowid as chunk_id, bm25(%s) as score
+			 FROM %s
+			 WHERE %s MATCH ?
 			 ORDER BY score
-			 LIMIT ?`, query, limit,
+			 LIMIT ?`, table, table, table, table), query, limit,
 		)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("search fts: %w", err)
+		return nil, fmt.Errorf("search %s: %w", table, err)
 	}
 	defer rows.Close()
 
@@ -110,11 +159,22 @@ func (db *DB) SearchFTS(query string, limit int, bookID *int64) ([]SearchResult,
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.ChunkID, &r.Score); err != nil {
-			return nil, fmt.Errorf("scan fts result: %w", err)
+			return nil, fmt.Errorf("scan %s result: %w", table, err)
 		}
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// InsertSegmentedFTS inserts segmented text into chunk_fts_seg for a chunk.
+func (db *DB) InsertSegmentedFTS(chunkID int64, heading, body string) error {
+	segHeading := SegmentText(heading)
+	segBody := SegmentText(body)
+	_, err := db.Exec(
+		`INSERT INTO chunk_fts_seg(rowid, heading, body) VALUES (?, ?, ?)`,
+		chunkID, segHeading, segBody,
+	)
+	return err
 }
 
 // SearchResult holds a search result with chunk ID and score.
