@@ -51,7 +51,7 @@
     "id": "q09",
     "category": "cross-book",
     "query": "技術文書の書き方とドキュメント運用を比較したい",
-    "expected_books": ["技術者のためのテクニカルライティング入門講座", "GitLabに学ぶ"]
+    "expected_books": ["技術者のためのテクニカルライティング入門講座"]
   },
   {
     "id": "q10",

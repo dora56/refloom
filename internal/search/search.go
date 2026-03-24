@@ -91,9 +91,27 @@ func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit i
 		return nil, fmt.Errorf("both searches failed: fts=%v, embed=%v", ftsErr, embErr)
 	}
 
-	// Reciprocal Rank Fusion
-	merged := reciprocalRankFusion(ftsResults, vecResults, limit)
-	return e.enrichResults(merged)
+	// Reciprocal Rank Fusion — fetch more candidates for diversification
+	mergeLimit := limit
+	intent := DetectIntent(query)
+	if intent.IsComparison && bookID == nil {
+		mergeLimit = limit * 2 // wider candidate pool for diversification
+	}
+
+	merged := reciprocalRankFusion(ftsResults, vecResults, mergeLimit)
+	results, err := e.enrichResults(merged)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply book diversification for comparison queries (only when no book filter)
+	if intent.IsComparison && bookID == nil {
+		results = DiversifyByBook(results, 2, limit)
+	} else if len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
 }
 
 // reciprocalRankFusion merges two ranked result lists using RRF.
