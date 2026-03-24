@@ -31,6 +31,9 @@ func init() {
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(reindexCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(exportCmd)
+	rootCmd.AddCommand(updateCheckCmd)
 }
 
 func Execute() error {
