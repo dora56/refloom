@@ -55,7 +55,8 @@ func (e *Engine) Search(ctx context.Context, query string, limit int, mode Mode,
 }
 
 func (e *Engine) searchFTS(query string, limit int, bookID *int64) ([]Result, error) {
-	dbResults, err := e.DB.SearchFTS(query, limit, bookID)
+	expanded := ExpandQuery(query)
+	dbResults, err := e.DB.SearchFTS(expanded, limit, bookID)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
@@ -76,7 +77,8 @@ func (e *Engine) searchVector(ctx context.Context, query string, limit int, book
 
 func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit int, bookID *int64) ([]Result, error) {
 	// Run FTS and vector search
-	ftsResults, ftsErr := e.DB.SearchFTS(query, fetchK, bookID)
+	expanded := ExpandQuery(query)
+	ftsResults, ftsErr := e.DB.SearchFTS(expanded, fetchK, bookID)
 	if ftsErr != nil {
 		ftsResults = nil // continue with vector only
 	}
