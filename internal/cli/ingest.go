@@ -208,6 +208,22 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 		chunkIDs = append(chunkIDs, id)
 	}
 
+	// Link prev/next within each chapter
+	prevByChapter := make(map[int64]int64) // chapterID -> last chunk ID
+	for i, ck := range resp.Chunks {
+		chapterID := chapterIDMap[ck.ChapterOrder]
+		chunkID := chunkIDs[i]
+		if prevID, exists := prevByChapter[chapterID]; exists {
+			if _, err := tx.Exec(`UPDATE chunk SET next_chunk_id = ? WHERE chunk_id = ?`, chunkID, prevID); err != nil {
+				return fmt.Errorf("link next: %w", err)
+			}
+			if _, err := tx.Exec(`UPDATE chunk SET prev_chunk_id = ? WHERE chunk_id = ?`, prevID, chunkID); err != nil {
+				return fmt.Errorf("link prev: %w", err)
+			}
+		}
+		prevByChapter[chapterID] = chunkID
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}

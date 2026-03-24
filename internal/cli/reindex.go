@@ -15,6 +15,7 @@ var (
 	reindexBookID    int64
 	reindexEmbedding bool
 	reindexFTS       bool
+	reindexLinks     bool
 )
 
 var reindexCmd = &cobra.Command{
@@ -27,6 +28,7 @@ func init() {
 	reindexCmd.Flags().Int64Var(&reindexBookID, "book", 0, "Reindex specific book only")
 	reindexCmd.Flags().BoolVar(&reindexEmbedding, "embedding", false, "Regenerate embeddings only")
 	reindexCmd.Flags().BoolVar(&reindexFTS, "fts", false, "Rebuild FTS index only")
+	reindexCmd.Flags().BoolVar(&reindexLinks, "links", false, "Rebuild prev/next chunk links only")
 }
 
 func runReindex(cmd *cobra.Command, args []string) error {
@@ -38,6 +40,15 @@ func runReindex(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer database.Close()
+
+	// If --links is set, only rebuild links
+	if reindexLinks {
+		if err := rebuildChunkLinks(database); err != nil {
+			return fmt.Errorf("rebuild links: %w", err)
+		}
+		slog.Info("reindex complete (links)")
+		return nil
+	}
 
 	doFTS := !reindexEmbedding || reindexFTS
 	doEmb := !reindexFTS || reindexEmbedding
@@ -122,5 +133,46 @@ func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
 	}
 
 	slog.Info("embeddings regenerated", "total", len(chunks), "fails", fails, "duration", time.Since(start).Round(time.Millisecond))
+	return nil
+}
+
+func rebuildChunkLinks(database *db.DB) error {
+	slog.Info("rebuilding chunk prev/next links")
+	start := time.Now()
+
+	// Clear all existing links
+	if _, err := database.Exec(`UPDATE chunk SET prev_chunk_id = NULL, next_chunk_id = NULL`); err != nil {
+		return fmt.Errorf("clear links: %w", err)
+	}
+
+	// Query all chunks ordered by book, chapter, chunk_order
+	rows, err := database.Query(
+		`SELECT chunk_id, chapter_id FROM chunk ORDER BY book_id, chapter_id, chunk_order`,
+	)
+	if err != nil {
+		return fmt.Errorf("query chunks: %w", err)
+	}
+	defer rows.Close()
+
+	prevByChapter := make(map[int64]int64) // chapterID -> last chunkID
+	linked := 0
+	for rows.Next() {
+		var chunkID, chapterID int64
+		if err := rows.Scan(&chunkID, &chapterID); err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
+		if prevID, exists := prevByChapter[chapterID]; exists {
+			if _, err := database.Exec(`UPDATE chunk SET next_chunk_id = ? WHERE chunk_id = ?`, chunkID, prevID); err != nil {
+				return fmt.Errorf("link next: %w", err)
+			}
+			if _, err := database.Exec(`UPDATE chunk SET prev_chunk_id = ? WHERE chunk_id = ?`, prevID, chunkID); err != nil {
+				return fmt.Errorf("link prev: %w", err)
+			}
+			linked++
+		}
+		prevByChapter[chapterID] = chunkID
+	}
+
+	slog.Info("chunk links rebuilt", "linked", linked, "duration", time.Since(start).Round(time.Millisecond))
 	return nil
 }
