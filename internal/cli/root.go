@@ -30,6 +30,7 @@ func init() {
 	rootCmd.AddCommand(askCmd)
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(reindexCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 func Execute() error {
