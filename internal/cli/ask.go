@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/dora56/refloom/internal/citation"
 	"github.com/dora56/refloom/internal/db"
@@ -31,7 +30,7 @@ func init() {
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeouts.Ask)
 	defer cancel()
 
 	query := args[0]
