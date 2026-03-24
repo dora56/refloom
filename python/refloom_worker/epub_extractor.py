@@ -1,8 +1,56 @@
 """EPUB extraction using ebooklib and BeautifulSoup."""
 
+import re
+
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
+
+# Decorative symbols to strip (headings, bullets, section markers)
+_DECORATIVE_RE = re.compile(r"[■□●○◆◇▲△▼▽★☆※◎▪▫►▻◄◅]")
+
+# Consecutive single-char lines: e.g. "第\n一\n章" → "第一章"
+# Matches sequences of (single char + newline) followed by a single char
+_SINGLE_CHAR_LINES_RE = re.compile(r"(?:(.)\n(?=.\n|.$))")
+
+# Three or more consecutive newlines → two newlines
+_MULTI_NEWLINES_RE = re.compile(r"\n{3,}")
+
+# Lines that are only whitespace (full-width or half-width spaces)
+_BLANK_LINE_RE = re.compile(r"^[\s　]+$", re.MULTILINE)
+
+
+def clean_text(text: str) -> str:
+    """Clean extracted EPUB text by removing layout artifacts.
+
+    Rules applied in order:
+    1. Remove decorative symbols (■●★ etc.)
+    2. Join consecutive single-character lines (layout-split titles)
+    3. Normalize blank-only lines to empty lines
+    4. Collapse 3+ consecutive newlines to 2
+    5. Strip leading/trailing whitespace per line
+    """
+    # 1. Remove decorative symbols
+    text = _DECORATIVE_RE.sub("", text)
+
+    # 2. Join consecutive single-character lines
+    # Repeatedly apply until stable (handles long runs like 5+ chars)
+    prev = None
+    while prev != text:
+        prev = text
+        text = _SINGLE_CHAR_LINES_RE.sub(r"\1", text)
+
+    # 3. Normalize blank-only lines
+    text = _BLANK_LINE_RE.sub("", text)
+
+    # 4. Collapse excessive newlines
+    text = _MULTI_NEWLINES_RE.sub("\n\n", text)
+
+    # 5. Strip per-line whitespace
+    lines = [line.strip() for line in text.split("\n")]
+    text = "\n".join(lines)
+
+    return text.strip()
 
 
 def extract_epub(path: str) -> dict:
@@ -45,7 +93,8 @@ def extract_epub(path: str) -> dict:
         html = item.get_content().decode("utf-8", errors="replace")
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(separator="\n", strip=True)
-        if text.strip():
+        text = clean_text(text)
+        if text:
             pages.append({"page_num": i + 1, "text": text})
 
     # Build chapters from TOC or fallback

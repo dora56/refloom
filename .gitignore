@@ -9,8 +9,10 @@ books/
 
 # Python
 python/refloom_worker/.venv/
+python/refloom_worker/uv.lock
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Go
 /refloom
