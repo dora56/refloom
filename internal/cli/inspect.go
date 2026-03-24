@@ -173,8 +173,13 @@ func showStats(database *db.DB) error {
 		dbSize = info.Size()
 	}
 
+	noEmbed, _ := database.CountChunksWithoutEmbedding()
+
 	fmt.Printf("Books:      %d\n", len(books))
 	fmt.Printf("Chunks:     %d\n", totalChunks)
+	if noEmbed > 0 {
+		fmt.Printf("No embed:   %d (run 'refloom reindex --embedding' to fix)\n", noEmbed)
+	}
 	fmt.Printf("DB Size:    %.1f MB\n", float64(dbSize)/1024/1024)
 	return nil
 }

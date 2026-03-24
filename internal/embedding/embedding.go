@@ -8,17 +8,19 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // Client calls the Ollama embedding API.
 type Client struct {
-	BaseURL string
-	Model   string
+	BaseURL    string
+	Model      string
+	MaxRetries int
 }
 
 // NewClient creates a new embedding client.
 func NewClient(baseURL, model string) *Client {
-	return &Client{BaseURL: baseURL, Model: model}
+	return &Client{BaseURL: baseURL, Model: model, MaxRetries: 3}
 }
 
 type embeddingRequest struct {
@@ -30,8 +32,31 @@ type embeddingResponse struct {
 	Embeddings [][]float64 `json:"embeddings"`
 }
 
-// Embed generates an embedding for the given text.
+// Embed generates an embedding for the given text, with retry on transient failures.
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	delays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
+
+	var lastErr error
+	for attempt := range c.MaxRetries {
+		result, err := c.embedOnce(ctx, text)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if attempt < c.MaxRetries-1 {
+			delay := delays[attempt]
+			slog.Warn("embedding retry", "attempt", attempt+1, "delay", delay, "error", err)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+	}
+	return nil, fmt.Errorf("embedding failed after %d attempts: %w", c.MaxRetries, lastErr)
+}
+
+func (c *Client) embedOnce(ctx context.Context, text string) ([]float32, error) {
 	reqBody := embeddingRequest{Model: c.Model, Input: text}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
