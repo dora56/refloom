@@ -182,6 +182,7 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
+	database.LogIngest(bookID, "chunked", fmt.Sprintf("%d chapters, %d chunks", len(resp.Chapters), len(chunkIDs)))
 
 	log.Info("generating embeddings", "chunks", len(chunkIDs))
 	embedStart := time.Now()
@@ -202,6 +203,11 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 			embedFails++
 		}
 	}
+
+	if embedFails > 0 {
+		database.LogIngest(bookID, "embedded", fmt.Sprintf("%d/%d succeeded", len(chunkIDs)-embedFails, len(chunkIDs)))
+	}
+	database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, %d embed failures", len(chunkIDs), embedFails))
 
 	log.Info("done",
 		"title", resp.Book.Title,
