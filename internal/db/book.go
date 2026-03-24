@@ -63,6 +63,22 @@ func (db *DB) GetBookByPath(sourcePath string) (*Book, error) {
 	return b, nil
 }
 
+// GetBookByHash retrieves a book by file hash.
+func (db *DB) GetBookByHash(fileHash string) (*Book, error) {
+	b := &Book{}
+	err := db.QueryRow(
+		`SELECT book_id, title, author, format, source_path, file_hash, tags, ingested_at, updated_at
+		 FROM book WHERE file_hash = ?`, fileHash,
+	).Scan(&b.BookID, &b.Title, &b.Author, &b.Format, &b.SourcePath, &b.FileHash, &b.Tags, &b.IngestedAt, &b.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get book by hash: %w", err)
+	}
+	return b, nil
+}
+
 // ListBooks returns all books.
 func (db *DB) ListBooks() ([]*Book, error) {
 	rows, err := db.Query(
