@@ -30,7 +30,7 @@ func init() {
 }
 
 func runReindex(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeouts.Reindex)
 	defer cancel()
 
 	database, err := db.Open(cfg.DBPath)

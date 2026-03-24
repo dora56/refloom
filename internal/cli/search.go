@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/dora56/refloom/internal/db"
 	"github.com/dora56/refloom/internal/embedding"
@@ -31,7 +30,7 @@ func init() {
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeouts.Search)
 	defer cancel()
 
 	query := args[0]

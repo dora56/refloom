@@ -36,7 +36,7 @@ func init() {
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeouts.Ingest)
 	defer cancel()
 
 	files, err := findBookFiles(args[0])
@@ -108,7 +108,9 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 
 	log.Info("extracting", "format", format)
 	start := time.Now()
-	resp, err := worker.Extract(ctx, absPath, format, 500, 100)
+	extractCtx, extractCancel := context.WithTimeout(ctx, cfg.Timeouts.WorkerPerFile)
+	defer extractCancel()
+	resp, err := worker.Extract(extractCtx, absPath, format, cfg.ChunkSize, cfg.ChunkOverlap)
 	if err != nil {
 		return fmt.Errorf("extract: %w", err)
 	}
