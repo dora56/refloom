@@ -1,8 +1,8 @@
 """Refloom Python worker: reads JSON from stdin, extracts and chunks documents, writes JSON to stdout."""
 
 import json
-import sys
 import os
+import sys
 import traceback
 
 

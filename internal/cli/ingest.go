@@ -52,7 +52,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer database.Close()
+	defer database.Close() //nolint:errcheck
 
 	workerDir, pythonPath := findWorkerPaths()
 	slog.Debug("python worker", "dir", workerDir, "python", pythonPath)
@@ -133,11 +133,11 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	switch quality {
 	case "ocr_required":
 		fmt.Printf("  quality: %s — skipping (no extractable text)\n", quality)
-		database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
+		_ = database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
 		return nil
 	case "extract_failed":
 		fmt.Printf("  quality: %s — skipping\n", quality)
-		database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
+		_ = database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
 		return nil
 	case "text_corrupt":
 		fmt.Printf("  quality: %s — proceeding with warning (text may contain mojibake)\n", quality)
@@ -147,7 +147,7 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	tagsJSON := "[]"
 	if len(ingestTags) > 0 {
@@ -227,7 +227,7 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
-	database.LogIngest(bookID, "chunked", fmt.Sprintf("%d chapters, %d chunks", len(resp.Chapters), len(chunkIDs)))
+	_ = database.LogIngest(bookID, "chunked", fmt.Sprintf("%d chapters, %d chunks", len(resp.Chapters), len(chunkIDs)))
 
 	// Populate segmented FTS index
 	for i, ck := range resp.Chunks {
@@ -257,9 +257,9 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	}
 
 	if embedFails > 0 {
-		database.LogIngest(bookID, "embedded", fmt.Sprintf("%d/%d succeeded", len(chunkIDs)-embedFails, len(chunkIDs)))
+		_ = database.LogIngest(bookID, "embedded", fmt.Sprintf("%d/%d succeeded", len(chunkIDs)-embedFails, len(chunkIDs)))
 	}
-	database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, %d embed failures", len(chunkIDs), embedFails))
+	_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, %d embed failures", len(chunkIDs), embedFails))
 
 	log.Info("done",
 		"title", resp.Book.Title,
@@ -307,11 +307,11 @@ func detectFormat(path string) string {
 }
 
 func fileHash(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -331,7 +331,7 @@ func findWorkerPaths() (workerDir, pythonPath string) {
 
 	if envDir := os.Getenv("REFLOOM_WORKER_DIR"); envDir != "" {
 		venvPython := filepath.Join(envDir, "refloom_worker", ".venv", "bin", "python3")
-		if _, err := os.Stat(venvPython); err == nil {
+		if _, err := os.Stat(venvPython); err == nil { //nolint:gosec
 			return envDir, venvPython
 		}
 		return envDir, "python3"
@@ -351,8 +351,8 @@ func findWorkerPaths() (workerDir, pythonPath string) {
 	for _, dir := range candidates {
 		absDir, _ := filepath.Abs(dir)
 		venvPython := filepath.Join(absDir, "refloom_worker", ".venv", "bin", "python3")
-		if _, err := os.Stat(venvPython); err == nil {
-			slog.Debug("found python worker", "dir", absDir)
+		if _, err := os.Stat(venvPython); err == nil { //nolint:gosec
+			slog.Debug("found python worker", "dir", absDir) //nolint:gosec
 			return absDir, venvPython
 		}
 	}

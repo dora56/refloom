@@ -37,7 +37,7 @@ func Open(path string) (*DB, error) {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
 
@@ -48,7 +48,7 @@ func Open(path string) (*DB, error) {
 
 	db := &DB{DB: sqlDB}
 	if err := db.migrate(); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 

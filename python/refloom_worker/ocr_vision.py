@@ -12,8 +12,8 @@ def is_available() -> bool:
     if sys.platform != "darwin":
         return False
     try:
-        import Vision  # noqa: F401
         import Quartz  # noqa: F401
+        import Vision  # noqa: F401
         return True
     except ImportError:
         return False

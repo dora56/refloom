@@ -4,7 +4,7 @@ import "testing"
 
 func TestDetectIntent(t *testing.T) {
 	tests := []struct {
-		query        string
+		query          string
 		wantComparison bool
 	}{
 		{"ドメインモデリング 値オブジェクト", false},

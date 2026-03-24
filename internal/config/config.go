@@ -29,7 +29,7 @@ type Config struct {
 	ChunkSize        int      `yaml:"chunk_size"`
 	ChunkOverlap     int      `yaml:"chunk_overlap"`
 	SearchLimit      int      `yaml:"search_limit"`
-	PromptBudget     int      `yaml:"prompt_budget"`     // max total chars for LLM excerpt section
+	PromptBudget     int      `yaml:"prompt_budget"`      // max total chars for LLM excerpt section
 	PromptChunkLimit int      `yaml:"prompt_chunk_limit"` // max chars per chunk in LLM prompt
 	Timeouts         Timeouts `yaml:"timeouts"`
 }
@@ -65,8 +65,8 @@ func Load() *Config {
 	home, err := os.UserHomeDir()
 	if err == nil {
 		configPath := filepath.Join(home, ".refloom", "config.yaml")
-		if data, err := os.ReadFile(configPath); err == nil {
-			yaml.Unmarshal(data, cfg)
+		if data, err := os.ReadFile(configPath); err == nil { //nolint:gosec
+			_ = yaml.Unmarshal(data, cfg)
 		}
 	}
 

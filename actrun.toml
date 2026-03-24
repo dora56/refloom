@@ -1,0 +1,10 @@
+# actrun ローカル CI 設定
+# actrun 0.14.1 を使用 (0.19+ は Node.js バンドルバグあり)
+# astral-sh/setup-uv の action.yml パース問題のため、
+# 現在は `make ci` でローカル CI を代替。
+# actrun の修正後に有効化予定。
+
+# [skip_actions]
+# "actions/checkout" = true
+# "actions/setup-go" = true
+# "astral-sh/setup-uv" = true

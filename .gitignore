@@ -17,6 +17,11 @@ __pycache__/
 # Go
 /refloom
 /bin/
+/dist/
+
+# Generated
+CHANGELOG.md
+RELEASE_NOTES.md
 
 # Validation artifacts
 validation-results/
@@ -27,3 +32,4 @@ validation-results/
 # IDE
 .idea/
 .vscode/
+_build/

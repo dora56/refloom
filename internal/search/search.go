@@ -20,11 +20,11 @@ const (
 
 // Result represents a search result with metadata.
 type Result struct {
-	ChunkID  int64
-	Score    float64
-	Chunk    *db.Chunk
-	Chapter  *db.Chapter
-	Book     *db.Book
+	ChunkID int64
+	Score   float64
+	Chunk   *db.Chunk
+	Chapter *db.Chapter
+	Book    *db.Book
 }
 
 // Engine performs hybrid search across FTS5 and vector indexes.

@@ -37,7 +37,7 @@ func (db *DB) GetChaptersByBook(bookID int64) ([]*Chapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get chapters: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var chapters []*Chapter
 	for rows.Next() {

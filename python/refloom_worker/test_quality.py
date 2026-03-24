@@ -1,6 +1,6 @@
 """Tests for text quality detection."""
 
-from refloom_worker.quality import looks_text_corrupt, classify_extraction, _sample_positions
+from refloom_worker.quality import _sample_positions, classify_extraction, looks_text_corrupt
 
 
 class TestLooksTextCorrupt:

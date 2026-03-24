@@ -67,7 +67,7 @@ func (db *DB) GetChunksByBook(bookID int64) ([]*Chunk, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get chunks by book: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	return scanChunks(rows)
 }
@@ -153,7 +153,7 @@ func (db *DB) searchFTSTable(table, query string, limit int, bookID *int64) ([]S
 	if err != nil {
 		return nil, fmt.Errorf("search %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var results []SearchResult
 	for rows.Next() {

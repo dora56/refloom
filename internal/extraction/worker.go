@@ -48,7 +48,7 @@ func (w *Worker) Extract(ctx context.Context, bookPath, format string, chunkSize
 
 	slog.Debug("spawning python worker", "python", w.PythonPath, "dir", w.WorkerDir, "path", absPath, "format", format)
 
-	cmd := exec.CommandContext(ctx, w.PythonPath, "-m", "refloom_worker.main")
+	cmd := exec.CommandContext(ctx, w.PythonPath, "-m", "refloom_worker.main") //nolint:gosec
 	cmd.Dir = w.WorkerDir
 	cmd.Stdin = bytes.NewReader(reqJSON)
 

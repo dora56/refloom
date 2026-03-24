@@ -80,7 +80,7 @@ func (c *Claude) Generate(ctx context.Context, system, user string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

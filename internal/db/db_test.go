@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,7 +14,7 @@ func setupTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -131,12 +130,16 @@ func TestChunkAndFTS(t *testing.T) {
 
 	// Also test raw FTS to debug
 	var ftsCount int
-	db.QueryRow("SELECT COUNT(*) FROM chunk_fts").Scan(&ftsCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM chunk_fts").Scan(&ftsCount); err != nil {
+		t.Fatalf("count chunk_fts: %v", err)
+	}
 	t.Logf("FTS row count: %d", ftsCount)
 
 	// Try trigram-like search by checking if body contains the text
 	var bodyText string
-	db.QueryRow("SELECT body FROM chunk_fts WHERE rowid = ?", chunk1ID).Scan(&bodyText)
+	if err := db.QueryRow("SELECT body FROM chunk_fts WHERE rowid = ?", chunk1ID).Scan(&bodyText); err != nil {
+		t.Fatalf("select body from chunk_fts: %v", err)
+	}
 	t.Logf("FTS body for chunk %d: %q", chunk1ID, bodyText)
 }
 
@@ -157,7 +160,7 @@ func TestVectorSearch(t *testing.T) {
 		return v
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		id, _ := db.InsertChunk(&Chunk{
 			BookID: bookID, ChapterID: chapterID, Heading: "H",
 			Body: "test", CharCount: 4, ChunkOrder: i,
@@ -189,7 +192,7 @@ func TestDefaultDBPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open default: %v", err)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck
 
 	// Verify the file was created
 	if _, err := os.Stat(expected); os.IsNotExist(err) {
@@ -206,7 +209,9 @@ func TestCascadeDelete(t *testing.T) {
 	_ = db.InsertEmbedding(chunkID, make([]float32, 768))
 
 	// Delete book should cascade
-	db.DeleteBook(bookID)
+	if err := db.DeleteBook(bookID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
 
 	// Verify chapter gone
 	chapters, _ := db.GetChaptersByBook(bookID)
@@ -222,11 +227,8 @@ func TestCascadeDelete(t *testing.T) {
 
 	// Verify embedding - vec0 doesn't cascade, but chunk is gone
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM chunk_vec WHERE chunk_id = ?", chunkID).Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM chunk_vec WHERE chunk_id = ?", chunkID).Scan(&count); err != nil {
+		t.Fatalf("count chunk_vec: %v", err)
+	}
 	_ = count // vec0 may or may not cascade, that's ok for PoC
-}
-
-// Helper to create nullable int64
-func nullInt(v int64) sql.NullInt64 {
-	return sql.NullInt64{Int64: v, Valid: true}
 }

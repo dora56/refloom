@@ -3,8 +3,8 @@
 import re
 
 import ebooklib
-from ebooklib import epub
 from bs4 import BeautifulSoup
+from ebooklib import epub
 
 # Decorative symbols to strip (headings, bullets, section markers)
 _DECORATIVE_RE = re.compile(r"[■□●○◆◇▲△▼▽★☆※◎▪▫►▻◄◅]")
@@ -66,7 +66,8 @@ def extract_epub(path: str) -> dict:
     # Extract metadata
     raw_title = _get_metadata(book, "title")
     # Some EPUBs have placeholder titles like "(blank)" - treat as empty
-    if raw_title and "(blank)" not in raw_title.lower() and raw_title.strip().lower() not in ("unknown", "untitled", ""):
+    placeholder_titles = ("unknown", "untitled", "")
+    if raw_title and "(blank)" not in raw_title.lower() and raw_title.strip().lower() not in placeholder_titles:
         title = raw_title
     else:
         title = _filename_title(path)

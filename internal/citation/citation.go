@@ -44,15 +44,15 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 	for i, r := range results {
 		// Build this entry
 		var entry strings.Builder
-		entry.WriteString(fmt.Sprintf("[%d] ", i+1))
+		fmt.Fprintf(&entry, "[%d] ", i+1)
 		if r.Book != nil {
-			entry.WriteString(fmt.Sprintf("Book: %s", r.Book.Title))
+			fmt.Fprintf(&entry, "Book: %s", r.Book.Title)
 		}
 		if r.Chapter != nil {
-			entry.WriteString(fmt.Sprintf(" | Chapter: %s", r.Chapter.Title))
+			fmt.Fprintf(&entry, " | Chapter: %s", r.Chapter.Title)
 		}
 		if r.Chunk != nil && r.Chunk.PageStart.Valid && r.Chunk.PageEnd.Valid {
-			entry.WriteString(fmt.Sprintf(" | Pages: %d-%d", r.Chunk.PageStart.Int64, r.Chunk.PageEnd.Int64))
+			fmt.Fprintf(&entry, " | Pages: %d-%d", r.Chunk.PageStart.Int64, r.Chunk.PageEnd.Int64)
 		}
 		entry.WriteString("\n")
 		if r.Chunk != nil {
@@ -75,7 +75,7 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 		totalLen += len(entryStr)
 	}
 
-	sb.WriteString(fmt.Sprintf("\nQuestion: %s", query))
+	fmt.Fprintf(&sb, "\nQuestion: %s", query)
 
 	return systemPrompt, sb.String()
 }
@@ -104,7 +104,7 @@ func FormatSources(results []search.Result) string {
 		if pages != "" {
 			parts = append(parts, pages)
 		}
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, strings.Join(parts, ", ")))
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, strings.Join(parts, ", "))
 	}
 	return sb.String()
 }

@@ -9,7 +9,7 @@ import (
 func makeResult(bookID int64, score float64) Result {
 	return Result{
 		Score: score,
-		Book:  &db.Book{BookID: bookID, Title: "Book" + string(rune('A'+bookID-1))},
+		Book:  &db.Book{BookID: bookID, Title: "Book" + string(rune('A'+bookID-1))}, //nolint:gosec
 	}
 }
 

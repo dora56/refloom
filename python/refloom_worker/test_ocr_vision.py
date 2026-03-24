@@ -1,6 +1,7 @@
 """Tests for Vision Framework OCR wrapper."""
 
 import sys
+
 import pytest
 
 from refloom_worker.ocr_vision import is_available

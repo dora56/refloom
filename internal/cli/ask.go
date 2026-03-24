@@ -44,7 +44,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer database.Close()
+	defer database.Close() //nolint:errcheck
 
 	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 

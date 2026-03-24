@@ -51,7 +51,7 @@ func (db *DB) SearchVector(queryEmbedding []float32, limit int, bookID *int64) (
 	if err != nil {
 		return nil, fmt.Errorf("search vector: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var results []SearchResult
 	for rows.Next() {

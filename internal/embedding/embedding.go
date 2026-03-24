@@ -73,7 +73,7 @@ func (c *Client) embedOnce(ctx context.Context, text string) ([]float32, error) 
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -111,7 +111,7 @@ func (c *Client) CheckHealth(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ollama not reachable at %s: %w\nStart it with: ollama serve", c.BaseURL, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	var tags struct {
 		Models []struct {

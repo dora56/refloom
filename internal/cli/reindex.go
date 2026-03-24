@@ -39,7 +39,7 @@ func runReindex(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer database.Close()
+	defer database.Close() //nolint:errcheck
 
 	// If --links is set, only rebuild links
 	if reindexLinks {
@@ -89,7 +89,7 @@ func rebuildFTS(database *db.DB) error {
 	if err != nil {
 		return fmt.Errorf("query chunks for fts_seg: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	count := 0
 	for rows.Next() {
@@ -145,7 +145,7 @@ func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
 			slog.Info("embedding progress", "done", i, "total", len(chunks))
 		}
 
-		database.DeleteEmbedding(chunk.ChunkID)
+		_ = database.DeleteEmbedding(chunk.ChunkID)
 
 		emb, err := embedClient.Embed(ctx, chunk.Body)
 		if err != nil {
@@ -179,7 +179,7 @@ func rebuildChunkLinks(database *db.DB) error {
 	if err != nil {
 		return fmt.Errorf("query chunks: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	prevByChapter := make(map[int64]int64) // chapterID -> last chunkID
 	linked := 0

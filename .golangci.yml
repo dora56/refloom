@@ -1,0 +1,18 @@
+version: "2"
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosec
+    - ineffassign
+
+formatters:
+  enable:
+    - gofmt
+
+run:
+  build-tags:
+    - fts5

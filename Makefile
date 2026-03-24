@@ -1,4 +1,4 @@
-.PHONY: build test clean python-setup lint dist validate
+.PHONY: build test clean python-setup lint lint-python test-python fix-check ci dist validate changelog
 
 BINARY := refloom
 BUILD_DIR := bin
@@ -27,7 +27,27 @@ python-setup:
 	cd python/refloom_worker && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 lint:
-	CGO_ENABLED=$(CGO_ENABLED) go vet -tags "$(GO_TAGS)" ./...
+	golangci-lint run --build-tags "$(GO_TAGS)"
+
+lint-python:
+	cd python/refloom_worker && uv run --group dev ruff check . && uv run --group dev pyright .
+
+test-python:
+	cd python/refloom_worker && uv run --group dev pytest
+
+fix-check:
+	@diff=$$(go fix -diff -tags "$(GO_TAGS)" ./... 2>&1); \
+	if [ -n "$$diff" ]; then \
+		echo "go fix has pending modernizations:"; \
+		echo "$$diff"; \
+		echo "Run 'go fix -tags fts5 ./...' to apply."; \
+		exit 1; \
+	fi
+
+ci: lint fix-check test lint-python test-python
+
+changelog:
+	git-cliff -o CHANGELOG.md
 
 validate: build
 	./scripts/validate_refloom.sh

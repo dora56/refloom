@@ -88,7 +88,7 @@ func (db *DB) ListBooks() ([]*Book, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list books: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var books []*Book
 	for rows.Next() {
