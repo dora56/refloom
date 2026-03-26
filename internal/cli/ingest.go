@@ -585,9 +585,10 @@ func saveChunkEmbeddings(
 ) (embeddingRunStats, error) {
 	stats := embeddingRunStats{}
 	effectiveBatchSize := resolvedEmbeddingBatchSize(batchSize)
+	const maxEmbedParallelWorkers = 8
 	parallelWorkers := 1
 	if cfg != nil && cfg.EmbedParallelWorkers > 1 {
-		parallelWorkers = cfg.EmbedParallelWorkers
+		parallelWorkers = min(cfg.EmbedParallelWorkers, maxEmbedParallelWorkers)
 	}
 
 	// Build batch list
@@ -640,12 +641,15 @@ func saveChunkEmbeddings(
 	// Collect results and save sequentially
 	results := make([]embedBatchResult, len(batches))
 	received := 0
+	previousProgress := 0
 	for result := range resultCh {
 		results[result.batchIndex] = result
 		received++
-		if shouldLogEmbeddingProgress(0, received*effectiveBatchSize) {
-			log.Info("embedding progress", "done", received*effectiveBatchSize, "total", len(chunks))
+		currentProgress := received * effectiveBatchSize
+		if shouldLogEmbeddingProgress(previousProgress, currentProgress) {
+			log.Info("embedding progress", "done", currentProgress, "total", len(chunks))
 		}
+		previousProgress = currentProgress
 	}
 
 	// Save in order (skip entries not received due to cancellation)
