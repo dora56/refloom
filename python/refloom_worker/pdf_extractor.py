@@ -15,6 +15,10 @@ _OCR_RETRY_MIN_CHARS = 50
 _OCR_FAST_SCALE_ENV = "REFLOOM_OCR_FAST_SCALE"
 _OCR_RETRY_MIN_CHARS_ENV = "REFLOOM_OCR_RETRY_MIN_CHARS"
 
+# LRU-1 document cache for persistent worker mode.
+# Avoids re-opening the same PDF on consecutive batch calls.
+_cached_doc: tuple[str, fitz.Document] | None = None
+
 
 @dataclass(frozen=True)
 class OCRSettings:
@@ -46,54 +50,74 @@ def probe_pdf(path: str) -> dict:
     }
 
 
+def _get_cached_doc(path: str) -> fitz.Document:
+    """Return a cached fitz.Document, opening a new one if the path changed."""
+    global _cached_doc  # noqa: PLW0603
+    if _cached_doc is not None and _cached_doc[0] == path:
+        return _cached_doc[1]
+    if _cached_doc is not None:
+        _cached_doc[1].close()
+    doc = fitz.open(path)
+    _cached_doc = (path, doc)
+    return doc
+
+
+def close_cached_doc():
+    """Close and discard the cached document. Called on worker shutdown."""
+    global _cached_doc  # noqa: PLW0603
+    if _cached_doc is not None:
+        _cached_doc[1].close()
+        _cached_doc = None
+
+
 def extract_pdf_pages(path: str, page_start: int, page_end: int, ocr_policy: str = "auto") -> dict:
     """Extract a bounded PDF page range with OCR fallback."""
-    with fitz.open(path) as doc:
-        page_end = min(page_end, len(doc))
-        ocr_available = _check_ocr_available()
-        ocr_settings = _load_ocr_settings()
-        stats = {
-            "ocr_pages": 0,
-            "ocr_retries": 0,
-            "ocr_ms": 0,
-            "ocr_fast_pages": 0,
-            "ocr_retry_pages": 0,
-            "ocr_fast_ms": 0,
-            "ocr_retry_ms": 0,
-        }
-        pages = []
-        for page_num in range(page_start, page_end + 1):
-            page = doc[page_num - 1]
-            text = _page_text(page)
-            should_try_ocr = ocr_policy != "never" and not text.strip() and ocr_available
-            if should_try_ocr:
-                stats["ocr_pages"] += 1
-                stats["ocr_fast_pages"] += 1
-                fast_start = time.perf_counter()
-                fast_text = _ocr_page(
+    doc = _get_cached_doc(path)
+    page_end = min(page_end, len(doc))
+    ocr_available = _check_ocr_available()
+    ocr_settings = _load_ocr_settings()
+    stats = {
+        "ocr_pages": 0,
+        "ocr_retries": 0,
+        "ocr_ms": 0,
+        "ocr_fast_pages": 0,
+        "ocr_retry_pages": 0,
+        "ocr_fast_ms": 0,
+        "ocr_retry_ms": 0,
+    }
+    pages = []
+    for page_num in range(page_start, page_end + 1):
+        page = doc[page_num - 1]
+        text = _page_text(page)
+        should_try_ocr = ocr_policy != "never" and not text.strip() and ocr_available
+        if should_try_ocr:
+            stats["ocr_pages"] += 1
+            stats["ocr_fast_pages"] += 1
+            fast_start = time.perf_counter()
+            fast_text = _ocr_page(
+                page,
+                render_scale=ocr_settings.fast_render_scale,
+                recognition_level=_FAST_RECOGNITION_LEVEL,
+            )
+            fast_elapsed_ms = _elapsed_ms(fast_start)
+            stats["ocr_fast_ms"] += fast_elapsed_ms
+            stats["ocr_ms"] += fast_elapsed_ms
+            text = fast_text
+            if _non_space_len(fast_text) < ocr_settings.retry_min_chars:
+                stats["ocr_retries"] += 1
+                stats["ocr_retry_pages"] += 1
+                retry_start = time.perf_counter()
+                accurate_text = _ocr_page(
                     page,
-                    render_scale=ocr_settings.fast_render_scale,
-                    recognition_level=_FAST_RECOGNITION_LEVEL,
+                    render_scale=ocr_settings.accurate_render_scale,
+                    recognition_level=_ACCURATE_RECOGNITION_LEVEL,
                 )
-                fast_elapsed_ms = _elapsed_ms(fast_start)
-                stats["ocr_fast_ms"] += fast_elapsed_ms
-                stats["ocr_ms"] += fast_elapsed_ms
-                text = fast_text
-                if _non_space_len(fast_text) < ocr_settings.retry_min_chars:
-                    stats["ocr_retries"] += 1
-                    stats["ocr_retry_pages"] += 1
-                    retry_start = time.perf_counter()
-                    accurate_text = _ocr_page(
-                        page,
-                        render_scale=ocr_settings.accurate_render_scale,
-                        recognition_level=_ACCURATE_RECOGNITION_LEVEL,
-                    )
-                    retry_elapsed_ms = _elapsed_ms(retry_start)
-                    stats["ocr_retry_ms"] += retry_elapsed_ms
-                    stats["ocr_ms"] += retry_elapsed_ms
-                    text = _preferred_ocr_text(fast_text, accurate_text)
+                retry_elapsed_ms = _elapsed_ms(retry_start)
+                stats["ocr_retry_ms"] += retry_elapsed_ms
+                stats["ocr_ms"] += retry_elapsed_ms
+                text = _preferred_ocr_text(fast_text, accurate_text)
 
-            pages.append({"page_num": page_num, "text": text})
+        pages.append({"page_num": page_num, "text": text})
 
     return {"pages": pages, "stats": stats}
 
