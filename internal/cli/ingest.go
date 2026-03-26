@@ -648,8 +648,11 @@ func saveChunkEmbeddings(
 		}
 	}
 
-	// Save in order
+	// Save in order (skip entries not received due to cancellation)
 	for _, result := range results {
+		if result.batch == nil {
+			continue
+		}
 		stats.Batches++
 		stats.RequestMS += result.requestMS
 		if result.err != nil {
