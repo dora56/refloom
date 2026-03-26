@@ -28,8 +28,18 @@ fi
 # Python: ruff on staged files
 if [ -n "$STAGED_PY" ]; then
   echo "==> ruff (staged Python files)"
-  if ! (cd python/refloom_worker && uv run --group dev ruff check $STAGED_PY) 2>&1; then
-    errors=1
+  # Split into worker files and other files
+  WORKER_PY=$(echo "$STAGED_PY" | grep '^python/refloom_worker/' | sed 's|^python/refloom_worker/||' || true)
+  OTHER_PY=$(echo "$STAGED_PY" | grep -v '^python/refloom_worker/' || true)
+  if [ -n "$WORKER_PY" ]; then
+    if ! (cd python/refloom_worker && uv run --group dev ruff check $WORKER_PY) 2>&1; then
+      errors=1
+    fi
+  fi
+  if [ -n "$OTHER_PY" ]; then
+    if ! (cd python/refloom_worker && uv run --group dev ruff check $(for f in $OTHER_PY; do echo "../../$f"; done)) 2>&1; then
+      errors=1
+    fi
   fi
 fi
 
