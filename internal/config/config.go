@@ -37,6 +37,7 @@ type Config struct {
 	OllamaURL             string                     `yaml:"ollama_url"`
 	OllamaEmbedModel      string                     `yaml:"ollama_embedding_model"`
 	EmbeddingBatchSize    int                        `yaml:"embedding_batch_size"`
+	EmbedParallelWorkers  int                        `yaml:"embed_parallel_workers"`
 	ExtractBatchWorkers   ExtractBatchWorkersSetting `yaml:"extract_batch_workers"`
 	ExtractAutoMaxWorkers int                        `yaml:"extract_auto_max_workers"`
 	LLMProvider           string                     `yaml:"llm_provider"`
@@ -58,6 +59,7 @@ func DefaultConfig() *Config {
 		OllamaURL:             "http://localhost:11434",
 		OllamaEmbedModel:      "nomic-embed-text",
 		EmbeddingBatchSize:    64,
+		EmbedParallelWorkers:  2,
 		ExtractBatchWorkers:   DefaultExtractBatchWorkersSetting(),
 		ExtractAutoMaxWorkers: DefaultExtractAutoMaxWorkers(),
 		LLMProvider:           "claude-cli",
@@ -112,6 +114,11 @@ func Load() *Config {
 	if v := os.Getenv("REFLOOM_EMBEDDING_BATCH_SIZE"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil {
 			cfg.EmbeddingBatchSize = parsed
+		}
+	}
+	if v := os.Getenv("REFLOOM_EMBED_PARALLEL_WORKERS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			cfg.EmbedParallelWorkers = parsed
 		}
 	}
 	if v := os.Getenv("REFLOOM_EXTRACT_BATCH_WORKERS"); v != "" {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dora56/refloom/internal/db"
@@ -564,6 +565,14 @@ func detectFormat(path string) string {
 	}
 }
 
+type embedBatchResult struct {
+	batchIndex int
+	batch      []embeddedChunk
+	embeddings [][]float32
+	requestMS  int64
+	err        error
+}
+
 func saveChunkEmbeddings(
 	ctx context.Context,
 	database *db.DB,
@@ -576,22 +585,143 @@ func saveChunkEmbeddings(
 ) (embeddingRunStats, error) {
 	stats := embeddingRunStats{}
 	effectiveBatchSize := resolvedEmbeddingBatchSize(batchSize)
+	parallelWorkers := 1
+	if cfg != nil && cfg.EmbedParallelWorkers > 1 {
+		parallelWorkers = cfg.EmbedParallelWorkers
+	}
 
+	// Build batch list
+	var batches []embedBatchRange
 	for start := 0; start < len(chunks); start += effectiveBatchSize {
 		end := min(start+effectiveBatchSize, len(chunks))
+		batches = append(batches, embedBatchRange{start: start, end: end, index: len(batches)})
+	}
 
-		batch := chunks[start:end]
-		processed := start + len(batch)
+	if parallelWorkers <= 1 || len(batches) <= 1 {
+		return saveChunkEmbeddingsSequential(ctx, database, embedClient, model, chunks, batches, replaceExisting, log)
+	}
+
+	// Parallel embedding: HTTP calls concurrent, DB saves sequential
+	resultCh := make(chan embedBatchResult, parallelWorkers)
+	batchCh := make(chan embedBatchRange, len(batches))
+	for _, b := range batches {
+		batchCh <- b
+	}
+	close(batchCh)
+
+	var wg sync.WaitGroup
+	for range min(parallelWorkers, len(batches)) {
+		wg.Go(func() {
+			for br := range batchCh {
+				batch := chunks[br.start:br.end]
+				texts := make([]string, 0, len(batch))
+				for _, chunk := range batch {
+					texts = append(texts, chunk.Body)
+				}
+				requestStart := time.Now()
+				embeddings, err := embedClient.EmbedBatch(ctx, texts)
+				requestMS := time.Since(requestStart).Milliseconds()
+				if err == nil && len(embeddings) != len(batch) {
+					err = fmt.Errorf("embedding batch size mismatch: got %d for %d", len(embeddings), len(batch))
+				}
+				select {
+				case resultCh <- embedBatchResult{batchIndex: br.index, batch: batch, embeddings: embeddings, requestMS: requestMS, err: err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		})
+	}
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Collect results and save sequentially
+	results := make([]embedBatchResult, len(batches))
+	received := 0
+	for result := range resultCh {
+		results[result.batchIndex] = result
+		received++
+		if shouldLogEmbeddingProgress(0, received*effectiveBatchSize) {
+			log.Info("embedding progress", "done", received*effectiveBatchSize, "total", len(chunks))
+		}
+	}
+
+	// Save in order
+	for _, result := range results {
 		stats.Batches++
-		if shouldLogEmbeddingProgress(start, processed) {
+		stats.RequestMS += result.requestMS
+		if result.err != nil {
+			log.Warn("embedding batch failed; falling back to single chunk requests", "batch_index", result.batchIndex, "error", result.err)
+			for _, chunk := range result.batch {
+				singleStart := time.Now()
+				emb, singleErr := embedClient.Embed(ctx, chunk.Body)
+				stats.RequestMS += time.Since(singleStart).Milliseconds()
+				if singleErr != nil {
+					log.Warn("embedding failed", "chunk_id", chunk.ChunkID, "error", singleErr)
+					stats.Fails++
+					continue
+				}
+				saveStart := time.Now()
+				if singleErr := saveEmbeddingBatch(database, model, []embeddedChunk{chunk}, [][]float32{emb}, replaceExisting); singleErr != nil {
+					stats.SaveMS += time.Since(saveStart).Milliseconds()
+					stats.Fails++
+					continue
+				}
+				stats.SaveMS += time.Since(saveStart).Milliseconds()
+			}
+			continue
+		}
+		saveStart := time.Now()
+		if err := saveEmbeddingBatch(database, model, result.batch, result.embeddings, replaceExisting); err != nil {
+			stats.SaveMS += time.Since(saveStart).Milliseconds()
+			log.Warn("save embedding batch failed; retrying chunk by chunk", "batch_index", result.batchIndex, "error", err)
+			for i, chunk := range result.batch {
+				singleSaveStart := time.Now()
+				if singleErr := saveEmbeddingBatch(database, model, []embeddedChunk{chunk}, [][]float32{result.embeddings[i]}, replaceExisting); singleErr != nil {
+					stats.SaveMS += time.Since(singleSaveStart).Milliseconds()
+					stats.Fails++
+					continue
+				}
+				stats.SaveMS += time.Since(singleSaveStart).Milliseconds()
+			}
+			continue
+		}
+		stats.SaveMS += time.Since(saveStart).Milliseconds()
+	}
+
+	return stats, nil
+}
+
+type embedBatchRange struct {
+	start int
+	end   int
+	index int
+}
+
+func saveChunkEmbeddingsSequential(
+	ctx context.Context,
+	database *db.DB,
+	embedClient *embedding.Client,
+	model string,
+	chunks []embeddedChunk,
+	batches []embedBatchRange,
+	replaceExisting bool,
+	log *slog.Logger,
+) (embeddingRunStats, error) {
+	stats := embeddingRunStats{}
+	for _, br := range batches {
+		batch := chunks[br.start:br.end]
+		processed := br.start + len(batch)
+		stats.Batches++
+		if shouldLogEmbeddingProgress(br.start, processed) {
 			log.Info("embedding progress", "done", processed, "total", len(chunks))
 		}
-
 		texts := make([]string, 0, len(batch))
 		for _, chunk := range batch {
 			texts = append(texts, chunk.Body)
 		}
-
 		requestStart := time.Now()
 		embeddings, err := embedClient.EmbedBatch(ctx, texts)
 		stats.RequestMS += time.Since(requestStart).Milliseconds()
@@ -599,7 +729,7 @@ func saveChunkEmbeddings(
 			if err == nil {
 				err = fmt.Errorf("embedding batch size mismatch: got %d embeddings for %d chunks", len(embeddings), len(batch))
 			}
-			log.Warn("embedding batch failed; falling back to single chunk requests", "batch_start", start, "batch_size", len(batch), "error", err)
+			log.Warn("embedding batch failed; falling back to single chunk requests", "batch_start", br.start, "batch_size", len(batch), "error", err)
 			for _, chunk := range batch {
 				singleRequestStart := time.Now()
 				emb, singleErr := embedClient.Embed(ctx, chunk.Body)
@@ -612,7 +742,6 @@ func saveChunkEmbeddings(
 				saveStart := time.Now()
 				if singleErr := saveEmbeddingBatch(database, model, []embeddedChunk{chunk}, [][]float32{emb}, replaceExisting); singleErr != nil {
 					stats.SaveMS += time.Since(saveStart).Milliseconds()
-					log.Warn("save embedding failed", "chunk_id", chunk.ChunkID, "error", singleErr)
 					stats.Fails++
 					continue
 				}
@@ -620,16 +749,14 @@ func saveChunkEmbeddings(
 			}
 			continue
 		}
-
 		saveStart := time.Now()
 		if err := saveEmbeddingBatch(database, model, batch, embeddings, replaceExisting); err != nil {
 			stats.SaveMS += time.Since(saveStart).Milliseconds()
-			log.Warn("save embedding batch failed; retrying chunk by chunk", "batch_start", start, "batch_size", len(batch), "error", err)
+			log.Warn("save embedding batch failed; retrying chunk by chunk", "batch_start", br.start, "batch_size", len(batch), "error", err)
 			for i, chunk := range batch {
 				singleSaveStart := time.Now()
 				if singleErr := saveEmbeddingBatch(database, model, []embeddedChunk{chunk}, [][]float32{embeddings[i]}, replaceExisting); singleErr != nil {
 					stats.SaveMS += time.Since(singleSaveStart).Milliseconds()
-					log.Warn("save embedding failed", "chunk_id", chunk.ChunkID, "error", singleErr)
 					stats.Fails++
 					continue
 				}
@@ -639,7 +766,6 @@ func saveChunkEmbeddings(
 		}
 		stats.SaveMS += time.Since(saveStart).Milliseconds()
 	}
-
 	return stats, nil
 }
 
