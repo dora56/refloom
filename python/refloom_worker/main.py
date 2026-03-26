@@ -9,12 +9,39 @@ from pathlib import Path
 
 
 def main():
+    """Single-shot mode: read one JSON command from stdin, execute, exit."""
     try:
         request = json.loads(sys.stdin.read())
     except json.JSONDecodeError as e:
-        _error_response(f"Invalid JSON input: {e}")
+        _write_response({"status": "error", "error": f"Invalid JSON input: {e}"})
         return
 
+    _dispatch_command(request)
+
+
+def run_persistent():
+    """Persistent mode: read newline-delimited JSON commands in a loop."""
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError as e:
+                _write_response({"status": "error", "error": f"Invalid JSON input: {e}"})
+                continue
+
+            command = request.get("command")
+            if command == "shutdown":
+                break
+
+            _dispatch_command(request)
+    finally:
+        _cleanup_persistent()
+
+
+def _dispatch_command(request: dict):
     command = request.get("command")
     try:
         if command == "probe":
@@ -27,10 +54,11 @@ def main():
             _handle_chunk(request)
             return
     except Exception as e:  # pragma: no cover - defensive response wrapper
-        _error_response(f"Worker command failed: {e}", traceback.format_exc())
+        _write_response({"status": "error", "error": f"Worker command failed: {e}"})
+        print(traceback.format_exc(), file=sys.stderr)
         return
 
-    _error_response(f"Unknown command: {command}")
+    _write_response({"status": "error", "error": f"Unknown command: {command}"})
 
 
 def _handle_probe(request: dict):
@@ -46,8 +74,7 @@ def _handle_probe(request: dict):
 
         result = probe_epub(path)
 
-    response = {"status": "ok", **result}
-    print(json.dumps(response, ensure_ascii=False))
+    _write_response({"status": "ok", **result})
 
 
 def _handle_extract_pages(request: dict):
@@ -70,13 +97,12 @@ def _handle_extract_pages(request: dict):
         result = extract_epub_pages(path, page_start, page_end)
 
     _write_jsonl(result["pages"], output_path)
-    response = {
+    _write_response({
         "status": "ok",
         "pages_written": len(result["pages"]),
         "stats": result.get("stats", {}),
         "batch_ms": round((time.perf_counter() - batch_start) * 1000),
-    }
-    print(json.dumps(response, ensure_ascii=False))
+    })
 
 
 def _handle_chunk(request: dict):
@@ -105,13 +131,12 @@ def _handle_chunk(request: dict):
         chunk_overlap=chunk_overlap,
     )
     chunks_written = write_chunks_jsonl(chunks, output_path)
-    response = {
+    _write_response({
         "status": "ok",
         "quality": quality,
         "chunks_written": chunks_written,
         "chunk_ms": round((time.perf_counter() - chunk_start) * 1000),
-    }
-    print(json.dumps(response, ensure_ascii=False))
+    })
 
 
 def _apply_epub_repair(pages: list[dict], quality: str) -> tuple[list[dict], str]:
@@ -127,6 +152,16 @@ def _apply_epub_repair(pages: list[dict], quality: str) -> tuple[list[dict], str
         return repaired_pages, repaired_quality
 
     return pages, quality
+
+
+def _cleanup_persistent():
+    """Release resources held by the persistent worker."""
+    try:
+        from refloom_worker.pdf_extractor import close_cached_doc
+
+        close_cached_doc()
+    except Exception:  # pragma: no cover
+        pass
 
 
 def _write_jsonl(rows: list[dict], output_path: str):
@@ -168,12 +203,14 @@ def _require_non_negative_int(value: int | None, name: str) -> int:
     return value
 
 
-def _error_response(error: str, details: str = ""):
-    response = {"status": "error", "error": error, "details": details}
-    print(json.dumps(response, ensure_ascii=False))
-    if details:
-        print(details, file=sys.stderr)
+def _write_response(response: dict):
+    """Write a JSON response line to stdout and flush immediately."""
+    sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
-    main()
+    if "--persistent" in sys.argv:
+        run_persistent()
+    else:
+        main()
