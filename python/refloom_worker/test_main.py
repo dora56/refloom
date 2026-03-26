@@ -10,6 +10,7 @@ from refloom_worker.main import (
     _handle_chunk,
     _handle_extract_pages,
     _handle_probe,
+    run_persistent,
 )
 
 # --- EPUB repair tests (existing) ---
@@ -189,3 +190,85 @@ def test_handle_chunk_missing_pages_path():
             "output_path": "/tmp/out.jsonl",
             "format": "pdf",
         })
+
+
+# --- Persistent mode tests ---
+
+
+def test_run_persistent_processes_multiple_commands(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "refloom_worker.pdf_extractor.probe_pdf",
+        lambda path: {"total_pages": 5, "mode": "text"},
+    )
+
+    commands = [
+        json.dumps({"command": "probe", "path": __file__, "format": "pdf"}),
+        json.dumps({"command": "probe", "path": __file__, "format": "pdf"}),
+        json.dumps({"command": "shutdown"}),
+    ]
+    monkeypatch.setattr("sys.stdin", iter(line + "\n" for line in commands))
+
+    run_persistent()
+
+    lines = capsys.readouterr().out.strip().split("\n")
+    assert len(lines) == 2
+    for line in lines:
+        resp = json.loads(line)
+        assert resp["status"] == "ok"
+        assert resp["total_pages"] == 5
+
+
+def test_run_persistent_handles_invalid_json(monkeypatch, capsys):
+    commands = [
+        "not valid json",
+        json.dumps({"command": "shutdown"}),
+    ]
+    monkeypatch.setattr("sys.stdin", iter(line + "\n" for line in commands))
+
+    run_persistent()
+
+    lines = capsys.readouterr().out.strip().split("\n")
+    assert len(lines) == 1
+    resp = json.loads(lines[0])
+    assert resp["status"] == "error"
+    assert "Invalid JSON" in resp["error"]
+
+
+def test_run_persistent_handles_eof(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "refloom_worker.pdf_extractor.probe_pdf",
+        lambda path: {"total_pages": 1},
+    )
+
+    commands = [
+        json.dumps({"command": "probe", "path": __file__, "format": "pdf"}),
+        # No shutdown — just EOF
+    ]
+    monkeypatch.setattr("sys.stdin", iter(line + "\n" for line in commands))
+
+    run_persistent()
+
+    lines = capsys.readouterr().out.strip().split("\n")
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == "ok"
+
+
+def test_run_persistent_skips_blank_lines(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "refloom_worker.pdf_extractor.probe_pdf",
+        lambda path: {"total_pages": 1},
+    )
+
+    commands = [
+        "",
+        "  ",
+        json.dumps({"command": "probe", "path": __file__, "format": "pdf"}),
+        json.dumps({"command": "shutdown"}),
+    ]
+    monkeypatch.setattr("sys.stdin", iter(line + "\n" for line in commands))
+
+    run_persistent()
+
+    lines = capsys.readouterr().out.strip().split("\n")
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == "ok"
