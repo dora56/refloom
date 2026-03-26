@@ -1,13 +1,16 @@
 # Refloom configuration
-db_path: ~/.refloom/refloom.db
-python_path: python/refloom_worker/.venv/bin/python3
+# db_path: /absolute/path/to/refloom.db  # omit to use the default ~/.refloom/refloom.db
+python_worker_dir: python
 
 # Ollama settings
 ollama_url: http://localhost:11434
 ollama_embedding_model: nomic-embed-text
+embedding_batch_size: 64
+extract_batch_workers: auto  # auto | positive int; values >=2 are only used for OCR-heavy PDFs
+extract_auto_max_workers: 8  # cap for Apple Silicon auto worker selection
 
 # LLM settings
-llm_provider: claude  # claude or ollama
+llm_provider: claude-cli  # claude-cli or ollama
 # anthropic_api_key: sk-ant-...  # or set ANTHROPIC_API_KEY env var
 
 # Chunking settings
