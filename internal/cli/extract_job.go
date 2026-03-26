@@ -350,6 +350,15 @@ func runExtractBatch(ctx context.Context, worker *extraction.Worker, absPath, fo
 		result.attempts = attempt
 		if err != nil {
 			result.err = err
+			if attempt < maxBatchAttempts {
+				backoff := time.Duration(attempt) * 3 * time.Second
+				select {
+				case <-ctx.Done():
+					result.err = ctx.Err()
+					return result
+				case <-time.After(backoff):
+				}
+			}
 			continue
 		}
 		result.completed = &extractCompletedBatch{
@@ -563,8 +572,13 @@ func writeJSONFile(path string, value any) error {
 	if err != nil {
 		return fmt.Errorf("marshal json: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write json file: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) //nolint:errcheck,gosec
+		return fmt.Errorf("rename json file: %w", err)
 	}
 	return nil
 }

@@ -91,6 +91,41 @@ func TestMergePageBatches(t *testing.T) {
 	}
 }
 
+func TestWriteJSONFileAtomic(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	data := map[string]string{"key": "value"}
+	if err := writeJSONFile(path, data); err != nil {
+		t.Fatalf("writeJSONFile: %v", err)
+	}
+
+	// File should exist with correct content
+	content, err := os.ReadFile(path) //nolint:gosec
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(content), `"key": "value"`) {
+		t.Fatalf("content = %q, want key:value", string(content))
+	}
+
+	// No .tmp file should remain
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf(".tmp file should not exist after successful write")
+	}
+
+	// Permissions should be 0600
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("permissions = %o, want 0600", perm)
+	}
+}
+
 func TestPrepareExtractJobResetsCompletedManifest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
