@@ -260,8 +260,9 @@ func extractPageBatches(
 }
 
 func extractBatchesSequential(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, manifest *extractJobManifest, pending []pageBatchRange) error {
+	ocrPolicy := resolveOCRPolicy(manifest.ExtractionMode)
 	for _, batch := range pending {
-		result := runExtractBatch(ctx, worker, absPath, format, jobDir, batch)
+		result := runExtractBatch(ctx, worker, absPath, format, jobDir, ocrPolicy, batch)
 		if err := applyExtractBatchResult(jobDir, manifest, result); err != nil {
 			return err
 		}
@@ -280,10 +281,11 @@ func extractBatchesConcurrent(ctx context.Context, worker extraction.Extractor, 
 	resultCh := make(chan extractPagesResult)
 	var wg sync.WaitGroup
 
+	ocrPolicy := resolveOCRPolicy(manifest.ExtractionMode)
 	for range workers {
 		wg.Go(func() {
 			for batch := range batchCh {
-				result := runExtractBatch(extractCtx, worker, absPath, format, jobDir, batch)
+				result := runExtractBatch(extractCtx, worker, absPath, format, jobDir, ocrPolicy, batch)
 				select {
 				case resultCh <- result:
 				case <-extractCtx.Done():
@@ -327,7 +329,14 @@ func extractBatchesConcurrent(ctx context.Context, worker extraction.Extractor, 
 	return firstErr
 }
 
-func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, batch pageBatchRange) extractPagesResult {
+func resolveOCRPolicy(extractionMode string) string {
+	if strings.EqualFold(extractionMode, "ocr-heavy") {
+		return "accurate-only"
+	}
+	return "auto"
+}
+
+func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir, ocrPolicy string, batch pageBatchRange) extractPagesResult {
 	result := extractPagesResult{batch: batch}
 	for attempt := 1; attempt <= maxBatchAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -343,7 +352,7 @@ func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, 
 			Format:     format,
 			PageStart:  batch.PageStart,
 			PageEnd:    batch.PageEnd,
-			OCRPolicy:  "auto",
+			OCRPolicy:  ocrPolicy,
 			OutputPath: outputPath,
 		})
 		batchCancel()
