@@ -1,6 +1,7 @@
 """EPUB extraction using ebooklib and BeautifulSoup."""
 
 import re
+import unicodedata
 
 import ebooklib
 from bs4 import BeautifulSoup
@@ -61,58 +62,104 @@ def extract_epub(path: str) -> dict:
       - chapters: [{title, order, page_start, page_end}]
       - pages: [{page_num, text}]  (page_num is spine item index)
     """
+    probe = probe_epub(path)
+    extracted = extract_epub_pages(path, 1, probe["book"]["page_count"])
+    return {
+        "book": probe["book"],
+        "chapters": probe["chapters"],
+        "pages": extracted["pages"],
+        "stats": extracted["stats"],
+    }
+
+
+def probe_epub(path: str) -> dict:
     book = epub.read_epub(path, options={"ignore_ncx": False})
-
-    # Extract metadata
-    raw_title = _get_metadata(book, "title")
-    # Some EPUBs have placeholder titles like "(blank)" - treat as empty
-    placeholder_titles = ("unknown", "untitled", "")
-    if raw_title and "(blank)" not in raw_title.lower() and raw_title.strip().lower() not in placeholder_titles:
-        title = raw_title
-    else:
-        title = _filename_title(path)
-    author = _get_metadata(book, "creator") or ""
-
-    # Extract TOC
+    title, author = _book_metadata(path, book)
     toc_items = _extract_toc(book)
-
-    # Extract text from spine items (reading order)
-    spine_items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
-    spine_ids = [item_id for item_id, _ in book.spine]
-    ordered_items = []
-    id_to_item = {item.get_id(): item for item in spine_items}
-    for sid in spine_ids:
-        if sid in id_to_item:
-            ordered_items.append(id_to_item[sid])
-
-    # If spine ordering fails, fall back to all document items
-    if not ordered_items:
-        ordered_items = spine_items
-
-    pages = []
-    for i, item in enumerate(ordered_items):
-        html = item.get_content().decode("utf-8", errors="replace")
-        soup = BeautifulSoup(html, "html.parser")
-        text = soup.get_text(separator="\n", strip=True)
-        text = clean_text(text)
-        if text:
-            pages.append({"page_num": i + 1, "text": text})
-
-    # Build chapters from TOC or fallback
-    chapters = _build_chapters_from_toc(toc_items, len(pages))
+    ordered_items = _ordered_spine_items(book)
+    page_count = len(ordered_items)
+    chapters = _build_chapters_from_toc(toc_items, page_count)
     if not chapters:
-        chapters = [{"title": "全体", "order": 0, "page_start": 1, "page_end": len(pages)}]
-
+        chapters = [{"title": "全体", "order": 0, "page_start": 1, "page_end": page_count}]
     return {
         "book": {
             "title": title,
             "author": author,
             "format": "epub",
-            "page_count": len(pages),
+            "page_count": page_count,
         },
         "chapters": chapters,
-        "pages": pages,
+        "extraction_mode": "text",
+        "recommended_batch_size": 64,
+        "ocr_candidate_pages_estimate": 0,
     }
+
+
+def extract_epub_pages(path: str, page_start: int, page_end: int) -> dict:
+    book = epub.read_epub(path, options={"ignore_ncx": False})
+    ordered_items = _ordered_spine_items(book)
+    page_end = min(page_end, len(ordered_items))
+    pages = []
+    for i in range(page_start - 1, page_end):
+        item = ordered_items[i]
+        html = item.get_content().decode("utf-8", errors="replace")
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text(separator="\n", strip=True)
+        text = clean_text(text)
+        pages.append({"page_num": i + 1, "text": text})
+
+    return {
+        "pages": pages,
+        "stats": {
+            "ocr_pages": 0,
+            "ocr_retries": 0,
+            "ocr_ms": 0,
+            "ocr_fast_pages": 0,
+            "ocr_retry_pages": 0,
+            "ocr_fast_ms": 0,
+            "ocr_retry_ms": 0,
+        },
+    }
+
+
+def repair_pages(pages: list[dict]) -> list[dict]:
+    """Repair suspicious EPUB text while preserving page order and count."""
+    repaired_pages = []
+    for page in pages:
+        text = page.get("text", "")
+        repaired_text, _ = repair_text(text)
+        repaired_pages.append({
+            "page_num": page.get("page_num"),
+            "text": repaired_text,
+        })
+    return repaired_pages
+
+
+def repair_text(text: str) -> tuple[str, bool]:
+    """Attempt conservative text repair for control/replacement-character damage."""
+    if not text:
+        return text, False
+
+    original_ratio, original_printable, original_suspicious = _quality_metrics(text)
+
+    candidate = unicodedata.normalize("NFKC", text)
+    candidate = candidate.replace("\r\n", "\n").replace("\r", "\n")
+    candidate = candidate.replace("\u00a0", " ").replace("\u200b", "")
+    candidate = candidate.replace("\ufeff", "").replace("\ufffd", "")
+    candidate = "".join(_repair_char(char) for char in candidate)
+    candidate = clean_text(candidate)
+
+    candidate_ratio, candidate_printable, _candidate_suspicious = _quality_metrics(candidate)
+    if candidate == text:
+        return text, False
+    if candidate_ratio >= original_ratio:
+        return text, False
+    if original_printable > 0 and candidate_printable == 0:
+        return text, False
+    min_printable = max(0, original_printable - original_suspicious)
+    if candidate_printable < min_printable:
+        return text, False
+    return candidate, True
 
 
 def _get_metadata(book, field: str) -> str:
@@ -120,6 +167,17 @@ def _get_metadata(book, field: str) -> str:
     if values:
         return values[0][0]
     return ""
+
+
+def _book_metadata(path: str, book) -> tuple[str, str]:
+    raw_title = _get_metadata(book, "title")
+    placeholder_titles = ("unknown", "untitled", "")
+    if raw_title and "(blank)" not in raw_title.lower() and raw_title.strip().lower() not in placeholder_titles:
+        title = raw_title
+    else:
+        title = _filename_title(path)
+    author = _get_metadata(book, "creator") or ""
+    return title, author
 
 
 def _filename_title(path: str) -> str:
@@ -137,6 +195,20 @@ def _extract_toc(book) -> list:
         return result
     _flatten_toc(toc, result)
     return result
+
+
+def _ordered_spine_items(book) -> list:
+    spine_items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+    spine_ids = [item_id for item_id, _ in book.spine]
+    ordered_items = []
+    id_to_item = {item.get_id(): item for item in spine_items}
+    for sid in spine_ids:
+        if sid in id_to_item:
+            ordered_items.append(id_to_item[sid])
+
+    if not ordered_items:
+        ordered_items = spine_items
+    return ordered_items
 
 
 def _flatten_toc(items, result):
@@ -176,3 +248,28 @@ def _build_chapters_from_toc(toc_items: list, total_pages: int) -> list:
         })
 
     return chapters
+
+
+def _quality_metrics(text: str) -> tuple[float, int, int]:
+    suspicious = 0
+    printable = 0
+    for char in text:
+        if char.isspace():
+            continue
+        printable += 1
+        category = unicodedata.category(char)
+        if char == "\ufffd" or category in ("Cc", "Cf", "Co", "Cs"):
+            suspicious += 1
+    if printable == 0:
+        return 0.0, 0, 0
+    return suspicious / printable, printable, suspicious
+
+
+def _repair_char(char: str) -> str:
+    if char in ("\n", "\t"):
+        return char
+
+    category = unicodedata.category(char)
+    if category in ("Cc", "Cf", "Co", "Cs"):
+        return ""
+    return char

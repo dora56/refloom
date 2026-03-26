@@ -1,5 +1,8 @@
 """Text chunking with paragraph awareness and chapter boundary respect."""
 
+import json
+from pathlib import Path
+
 
 def chunk_pages(pages: list, chapters: list, chunk_size: int = 500, chunk_overlap: int = 100) -> list:
     """Chunk extracted pages into smaller pieces, respecting chapter boundaries.
@@ -40,6 +43,26 @@ def chunk_pages(pages: list, chapters: list, chunk_size: int = 500, chunk_overla
         all_chunks.extend(chunks)
 
     return all_chunks
+
+
+def load_pages_jsonl(path: str) -> list:
+    pages = []
+    with Path(path).open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            pages.append(json.loads(line))
+    return pages
+
+
+def write_chunks_jsonl(chunks: list, path: str) -> int:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as fh:
+        for chunk in chunks:
+            fh.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+    return len(chunks)
 
 
 def _split_paragraphs(text: str) -> list:

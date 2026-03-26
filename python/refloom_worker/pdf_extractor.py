@@ -1,59 +1,112 @@
 """PDF extraction using PyMuPDF (fitz) with optional Vision Framework OCR."""
 
+import os
 import sys
+import time
+from dataclasses import dataclass
 
 import fitz
 
+_FAST_RENDER_SCALE = 1.5
+_ACCURATE_RENDER_SCALE = 2.0
+_FAST_RECOGNITION_LEVEL = 1
+_ACCURATE_RECOGNITION_LEVEL = 0
+_OCR_RETRY_MIN_CHARS = 50
+_OCR_FAST_SCALE_ENV = "REFLOOM_OCR_FAST_SCALE"
+_OCR_RETRY_MIN_CHARS_ENV = "REFLOOM_OCR_RETRY_MIN_CHARS"
+
+
+@dataclass(frozen=True)
+class OCRSettings:
+    fast_render_scale: float
+    accurate_render_scale: float
+    retry_min_chars: int
+
+
+def probe_pdf(path: str) -> dict:
+    """Return metadata and extraction guidance for a PDF."""
+    with fitz.open(path) as doc:
+        book, chapters = _book_and_chapters(doc, path)
+        sample_pages = _sample_page_numbers(len(doc))
+        sample_failures = 0
+        for page_num in sample_pages:
+            text = _page_text(doc[page_num - 1])
+            if not text.strip():
+                sample_failures += 1
+
+    ocr_heavy = len(sample_pages) > 0 and sample_failures * 2 > len(sample_pages)
+    extraction_mode = "ocr-heavy" if ocr_heavy else "text"
+    recommended_batch_size = 16 if ocr_heavy else 64
+    return {
+        "book": book,
+        "chapters": chapters,
+        "extraction_mode": extraction_mode,
+        "recommended_batch_size": recommended_batch_size,
+        "ocr_candidate_pages_estimate": sample_failures,
+    }
+
+
+def extract_pdf_pages(path: str, page_start: int, page_end: int, ocr_policy: str = "auto") -> dict:
+    """Extract a bounded PDF page range with OCR fallback."""
+    with fitz.open(path) as doc:
+        page_end = min(page_end, len(doc))
+        ocr_available = _check_ocr_available()
+        ocr_settings = _load_ocr_settings()
+        stats = {
+            "ocr_pages": 0,
+            "ocr_retries": 0,
+            "ocr_ms": 0,
+            "ocr_fast_pages": 0,
+            "ocr_retry_pages": 0,
+            "ocr_fast_ms": 0,
+            "ocr_retry_ms": 0,
+        }
+        pages = []
+        for page_num in range(page_start, page_end + 1):
+            page = doc[page_num - 1]
+            text = _page_text(page)
+            should_try_ocr = ocr_policy != "never" and not text.strip() and ocr_available
+            if should_try_ocr:
+                stats["ocr_pages"] += 1
+                stats["ocr_fast_pages"] += 1
+                fast_start = time.perf_counter()
+                fast_text = _ocr_page(
+                    page,
+                    render_scale=ocr_settings.fast_render_scale,
+                    recognition_level=_FAST_RECOGNITION_LEVEL,
+                )
+                fast_elapsed_ms = _elapsed_ms(fast_start)
+                stats["ocr_fast_ms"] += fast_elapsed_ms
+                stats["ocr_ms"] += fast_elapsed_ms
+                text = fast_text
+                if _non_space_len(fast_text) < ocr_settings.retry_min_chars:
+                    stats["ocr_retries"] += 1
+                    stats["ocr_retry_pages"] += 1
+                    retry_start = time.perf_counter()
+                    accurate_text = _ocr_page(
+                        page,
+                        render_scale=ocr_settings.accurate_render_scale,
+                        recognition_level=_ACCURATE_RECOGNITION_LEVEL,
+                    )
+                    retry_elapsed_ms = _elapsed_ms(retry_start)
+                    stats["ocr_retry_ms"] += retry_elapsed_ms
+                    stats["ocr_ms"] += retry_elapsed_ms
+                    text = _preferred_ocr_text(fast_text, accurate_text)
+
+            pages.append({"page_num": page_num, "text": text})
+
+    return {"pages": pages, "stats": stats}
+
 
 def extract_pdf(path: str) -> dict:
-    """Extract text, TOC, and page info from a PDF file.
-
-    Returns a dict with:
-      - book: {title, author, format, page_count}
-      - chapters: [{title, order, page_start, page_end}]
-      - pages: [{page_num, text}]
-    """
-    doc = fitz.open(path)
-
-    # Extract metadata
-    metadata = doc.metadata or {}
-    title = metadata.get("title", "") or _filename_title(path)
-    author = metadata.get("author", "")
-
-    # Extract TOC for chapter structure
-    toc = doc.get_toc(simple=True)  # [[level, title, page_num], ...]
-    chapters = _build_chapters(toc, len(doc))
-
-    # If no TOC found, treat entire document as one chapter
-    if not chapters:
-        chapters = [{"title": "全体", "order": 0, "page_start": 1, "page_end": len(doc)}]
-
-    # Extract text page by page, with OCR fallback for image pages
-    ocr_available = _check_ocr_available()
-    pages = []
-    for i in range(len(doc)):
-        page = doc[i]
-        text = page.get_text("text")
-
-        # If page has no text and OCR is available, try Vision OCR
-        if not text.strip() and ocr_available:
-            import sys as _sys
-            print(f"  OCR page {i + 1}/{len(doc)}...", file=_sys.stderr, flush=True)
-            text = _ocr_page(page)
-
-        pages.append({"page_num": i + 1, "text": text})
-
-    doc.close()
-
+    """Backward-compatible full-document extraction used by legacy tests/tools."""
+    probe = probe_pdf(path)
+    extracted = extract_pdf_pages(path, 1, probe["book"]["page_count"])
     return {
-        "book": {
-            "title": title,
-            "author": author,
-            "format": "pdf",
-            "page_count": len(pages),
-        },
-        "chapters": chapters,
-        "pages": pages,
+        "book": probe["book"],
+        "chapters": probe["chapters"],
+        "pages": extracted["pages"],
+        "stats": extracted["stats"],
     }
 
 
@@ -91,6 +144,40 @@ def _build_chapters(toc: list, total_pages: int) -> list:
     return chapters
 
 
+def _book_and_chapters(doc, path: str) -> tuple[dict, list]:
+    metadata = doc.metadata or {}
+    title = metadata.get("title", "") or _filename_title(path)
+    author = metadata.get("author", "")
+    toc = doc.get_toc(simple=True)
+    chapters = _build_chapters(toc, len(doc))
+    if not chapters:
+        chapters = [{"title": "全体", "order": 0, "page_start": 1, "page_end": len(doc)}]
+    return {
+        "title": title,
+        "author": author,
+        "format": "pdf",
+        "page_count": len(doc),
+    }, chapters
+
+
+def _sample_page_numbers(page_count: int) -> list[int]:
+    if page_count <= 0:
+        return []
+    candidates = [1, max(1, (page_count + 1) // 2), page_count]
+    result = []
+    for page_num in candidates:
+        if page_num not in result:
+            result.append(page_num)
+    return result
+
+
+def _page_text(page) -> str:
+    raw_text = page.get_text("text")
+    if isinstance(raw_text, str):
+        return raw_text
+    return ""
+
+
 def _check_ocr_available() -> bool:
     """Check if Vision Framework OCR is available."""
     if sys.platform != "darwin":
@@ -102,7 +189,15 @@ def _check_ocr_available() -> bool:
         return False
 
 
-def _ocr_page(page) -> str:
+def _load_ocr_settings() -> OCRSettings:
+    return OCRSettings(
+        fast_render_scale=_env_float(_OCR_FAST_SCALE_ENV, _FAST_RENDER_SCALE),
+        accurate_render_scale=_ACCURATE_RENDER_SCALE,
+        retry_min_chars=_env_int(_OCR_RETRY_MIN_CHARS_ENV, _OCR_RETRY_MIN_CHARS),
+    )
+
+
+def _ocr_page(page, render_scale: float, recognition_level: int) -> str:
     """OCR a single PDF page using Vision Framework.
 
     Renders the page to a high-resolution PNG, then passes to Vision OCR.
@@ -110,11 +205,46 @@ def _ocr_page(page) -> str:
     try:
         from refloom_worker.ocr_vision import recognize_text
 
-        # Render at 2x zoom (balance between OCR accuracy and speed)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        pix = page.get_pixmap(matrix=fitz.Matrix(render_scale, render_scale), alpha=False)
         image_data = pix.tobytes(output="png")
 
-        texts = recognize_text(image_data)
+        texts = recognize_text(image_data, recognition_level=recognition_level)
         return "\n".join(texts)
     except Exception:
         return ""
+
+
+def _preferred_ocr_text(fast_text: str, accurate_text: str) -> str:
+    fast_len = _non_space_len(fast_text)
+    accurate_len = _non_space_len(accurate_text)
+    if accurate_len > fast_len:
+        return accurate_text
+    return fast_text
+
+
+def _non_space_len(text: str) -> int:
+    return sum(1 for char in text if not char.isspace())
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _elapsed_ms(start: float) -> int:
+    return round((time.perf_counter() - start) * 1000)

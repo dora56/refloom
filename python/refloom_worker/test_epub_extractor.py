@@ -1,6 +1,11 @@
-"""Tests for EPUB text cleaning logic."""
+"""Tests for EPUB text cleaning and repair logic."""
 
-from refloom_worker.epub_extractor import clean_text
+from refloom_worker.epub_extractor import (
+    _build_chapters_from_toc,
+    clean_text,
+    repair_pages,
+    repair_text,
+)
 
 
 class TestCleanText:
@@ -67,3 +72,32 @@ class TestCleanText:
         """Lines with 2+ chars should not be joined."""
         text = "AB\nCD\nEF"
         assert clean_text(text) == "AB\nCD\nEF"
+
+
+class TestRepairText:
+    """Tests for conservative EPUB repair."""
+
+    def test_removes_control_and_replacement_chars(self):
+        repaired, changed = repair_text("正常\u200bテキスト\ufffd\u0000")
+        assert changed is True
+        assert repaired == "正常テキスト"
+
+    def test_keeps_text_when_repair_would_shrink_too_much(self):
+        text = "\ufffd\ufffd\ufffd"
+        repaired, changed = repair_text(text)
+        assert changed is False
+        assert repaired == text
+
+    def test_repairs_pages_in_place(self):
+        pages = [{"page_num": 1, "text": "A\u200bB\ufffd"}]
+        repaired = repair_pages(pages)
+        assert repaired == [{"page_num": 1, "text": "AB"}]
+
+
+def test_build_chapters_from_toc_spreads_ranges_across_pages():
+    chapters = _build_chapters_from_toc([("第1章", "a"), ("第2章", "b")], 10)
+
+    assert chapters == [
+        {"title": "第1章", "order": 0, "page_start": 1, "page_end": 5},
+        {"title": "第2章", "order": 1, "page_start": 6, "page_end": 10},
+    ]
