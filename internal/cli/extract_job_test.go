@@ -80,6 +80,15 @@ func TestMergePageBatches(t *testing.T) {
 	if string(data) != want {
 		t.Fatalf("merged data = %q, want %q", string(data), want)
 	}
+
+	// Verify restrictive file permissions
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatalf("stat output: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("permissions = %o, want 0600", perm)
+	}
 }
 
 func TestPrepareExtractJobResetsCompletedManifest(t *testing.T) {

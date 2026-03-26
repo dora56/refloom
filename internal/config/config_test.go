@@ -246,6 +246,30 @@ extract_auto_max_workers: 5
 	}
 }
 
+func TestLoadInvalidYAMLReturnsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, ".refloom")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Write invalid YAML
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(":::invalid yaml{{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", dir)
+
+	cfg := Load()
+
+	// Should return defaults without panicking
+	if cfg.OllamaURL != "http://localhost:11434" {
+		t.Errorf("OllamaURL = %q, want default http://localhost:11434", cfg.OllamaURL)
+	}
+	if cfg.ChunkSize != 500 {
+		t.Errorf("ChunkSize = %d, want default 500", cfg.ChunkSize)
+	}
+}
+
 func TestLoadLegacyPythonPathCompatibility(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, ".refloom")

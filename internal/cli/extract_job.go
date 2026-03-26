@@ -589,7 +589,7 @@ func mergePageBatches(outputPath string, batches []extractCompletedBatch) error 
 	slices.SortFunc(batches, func(a, b extractCompletedBatch) int {
 		return a.PageStart - b.PageStart
 	})
-	outFile, err := os.Create(outputPath) //nolint:gosec
+	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("create merged pages file: %w", err)
 	}

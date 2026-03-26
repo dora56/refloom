@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -86,7 +87,9 @@ func Load() *Config {
 	if err == nil {
 		configPath := filepath.Join(home, ".refloom", "config.yaml")
 		if data, err := os.ReadFile(configPath); err == nil { //nolint:gosec
-			_ = yaml.Unmarshal(data, cfg)
+			if yamlErr := yaml.Unmarshal(data, cfg); yamlErr != nil {
+				slog.Warn("config parse error, using defaults", "path", configPath, "error", yamlErr)
+			}
 			var legacy legacyConfig
 			if legacyErr := yaml.Unmarshal(data, &legacy); legacyErr == nil {
 				applyLegacyConfig(cfg, legacy)
