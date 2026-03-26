@@ -87,7 +87,10 @@ def _handle_extract_pages(request: dict):
     if fmt == "pdf":
         from refloom_worker.pdf_extractor import extract_pdf_pages
 
-        result = extract_pdf_pages(path, page_start, page_end, request.get("ocr_policy", "auto"))
+        result = extract_pdf_pages(
+            path, page_start, page_end,
+            request.get("ocr_policy", "auto"), request.get("file_hash"),
+        )
     else:
         from refloom_worker.epub_extractor import extract_epub_pages
 

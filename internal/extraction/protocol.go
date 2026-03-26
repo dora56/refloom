@@ -27,6 +27,7 @@ type ExtractPagesRequest struct {
 	PageStart  int    `json:"page_start"`
 	PageEnd    int    `json:"page_end"`
 	OCRPolicy  string `json:"ocr_policy,omitempty"`
+	FileHash   string `json:"file_hash,omitempty"`
 	OutputPath string `json:"output_path"`
 }
 

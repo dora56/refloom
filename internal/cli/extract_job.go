@@ -262,7 +262,7 @@ func extractPageBatches(
 func extractBatchesSequential(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, manifest *extractJobManifest, pending []pageBatchRange) error {
 	ocrPolicy := resolveOCRPolicy(manifest.ExtractionMode)
 	for _, batch := range pending {
-		result := runExtractBatch(ctx, worker, absPath, format, jobDir, ocrPolicy, batch)
+		result := runExtractBatch(ctx, worker, absPath, format, jobDir, ocrPolicy, manifest.JobID, batch)
 		if err := applyExtractBatchResult(jobDir, manifest, result); err != nil {
 			return err
 		}
@@ -285,7 +285,7 @@ func extractBatchesConcurrent(ctx context.Context, worker extraction.Extractor, 
 	for range workers {
 		wg.Go(func() {
 			for batch := range batchCh {
-				result := runExtractBatch(extractCtx, worker, absPath, format, jobDir, ocrPolicy, batch)
+				result := runExtractBatch(extractCtx, worker, absPath, format, jobDir, ocrPolicy, manifest.JobID, batch)
 				select {
 				case resultCh <- result:
 				case <-extractCtx.Done():
@@ -336,7 +336,7 @@ func resolveOCRPolicy(extractionMode string) string {
 	return "auto"
 }
 
-func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir, ocrPolicy string, batch pageBatchRange) extractPagesResult {
+func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir, ocrPolicy, fileHash string, batch pageBatchRange) extractPagesResult {
 	result := extractPagesResult{batch: batch}
 	for attempt := 1; attempt <= maxBatchAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -353,6 +353,7 @@ func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, 
 			PageStart:  batch.PageStart,
 			PageEnd:    batch.PageEnd,
 			OCRPolicy:  ocrPolicy,
+			FileHash:   fileHash,
 			OutputPath: outputPath,
 		})
 		batchCancel()
