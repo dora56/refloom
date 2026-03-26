@@ -24,29 +24,89 @@ func NewWorker(pythonPath, workerDir string) *Worker {
 	}
 }
 
-// Extract runs the Python worker to extract and chunk a document.
-func (w *Worker) Extract(ctx context.Context, bookPath, format string, chunkSize, chunkOverlap int) (*Response, error) {
+// Probe discovers extraction metadata for the given document.
+func (w *Worker) Probe(ctx context.Context, bookPath, format string) (*ProbeResponse, error) {
 	absPath, err := filepath.Abs(bookPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
-	req := Request{
-		Command: "extract",
+	req := ProbeRequest{
+		Command: "probe",
 		Path:    absPath,
 		Format:  format,
-		Options: Options{
-			ChunkSize:    chunkSize,
-			ChunkOverlap: chunkOverlap,
-		},
 	}
 
-	reqJSON, err := json.Marshal(req)
+	var resp ProbeResponse
+	if err := w.runJSONCommand(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("probe error: %s", resp.Error)
+	}
+	return &resp, nil
+}
+
+// ExtractPages extracts a bounded page range and writes the JSONL batch to disk.
+func (w *Worker) ExtractPages(ctx context.Context, req ExtractPagesRequest) (*ExtractPagesResponse, error) {
+	req.Command = "extract-pages"
+	if absPath, err := filepath.Abs(req.Path); err == nil {
+		req.Path = absPath
+	} else {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+	if absOut, err := filepath.Abs(req.OutputPath); err == nil {
+		req.OutputPath = absOut
+	} else {
+		return nil, fmt.Errorf("resolve output path: %w", err)
+	}
+
+	var resp ExtractPagesResponse
+	if err := w.runJSONCommand(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("extract-pages error: %s", resp.Error)
+	}
+	return &resp, nil
+}
+
+// Chunk converts persisted pages into persisted chunks.
+func (w *Worker) Chunk(ctx context.Context, req ChunkRequest) (*ChunkResponse, error) {
+	req.Command = "chunk"
+	if absPages, err := filepath.Abs(req.PagesPath); err == nil {
+		req.PagesPath = absPages
+	} else {
+		return nil, fmt.Errorf("resolve pages path: %w", err)
+	}
+	if absChapters, err := filepath.Abs(req.ChaptersPath); err == nil {
+		req.ChaptersPath = absChapters
+	} else {
+		return nil, fmt.Errorf("resolve chapters path: %w", err)
+	}
+	if absOut, err := filepath.Abs(req.OutputPath); err == nil {
+		req.OutputPath = absOut
+	} else {
+		return nil, fmt.Errorf("resolve output path: %w", err)
+	}
+
+	var resp ChunkResponse
+	if err := w.runJSONCommand(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("chunk error: %s", resp.Error)
+	}
+	return &resp, nil
+}
+
+func (w *Worker) runJSONCommand(ctx context.Context, reqBody any, respBody any) error {
+	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	slog.Debug("spawning python worker", "python", w.PythonPath, "dir", w.WorkerDir, "path", absPath, "format", format)
+	slog.Debug("spawning python worker", "python", w.PythonPath, "dir", w.WorkerDir)
 
 	cmd := exec.CommandContext(ctx, w.PythonPath, "-m", "refloom_worker.main") //nolint:gosec
 	cmd.Dir = w.WorkerDir
@@ -61,21 +121,15 @@ func (w *Worker) Extract(ctx context.Context, bookPath, format string, chunkSize
 		if stderrStr != "" {
 			slog.Error("python worker stderr", "output", stderrStr)
 		}
-		return nil, fmt.Errorf("python worker failed: %w", err)
+		return fmt.Errorf("python worker failed: %w", err)
 	}
 
 	if stderrStr := stderr.String(); stderrStr != "" {
 		slog.Debug("python worker stderr", "output", stderrStr)
 	}
 
-	var resp Response
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		return nil, fmt.Errorf("parse response: %w (stdout length: %d bytes)", err, stdout.Len())
+	if err := json.Unmarshal(stdout.Bytes(), respBody); err != nil {
+		return fmt.Errorf("parse response: %w (stdout length: %d bytes)", err, stdout.Len())
 	}
-
-	if resp.Status != "ok" {
-		return nil, fmt.Errorf("extraction error: %s", resp.Error)
-	}
-
-	return &resp, nil
+	return nil
 }

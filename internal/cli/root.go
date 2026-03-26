@@ -36,6 +36,7 @@ func init() {
 	rootCmd.AddCommand(updateCheckCmd)
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(workCmd)
 }
 
 func Execute() error {

@@ -207,6 +207,12 @@ func TestCascadeDelete(t *testing.T) {
 	chapterID, _ := db.InsertChapter(&Chapter{BookID: bookID, Title: "Ch", ChapterOrder: 0})
 	chunkID, _ := db.InsertChunk(&Chunk{BookID: bookID, ChapterID: chapterID, Heading: "H", Body: "text", CharCount: 4, ChunkOrder: 0})
 	_ = db.InsertEmbedding(chunkID, make([]float32, 768))
+	if _, err := db.Exec(`INSERT INTO chunk_fts_seg(rowid, heading, body) VALUES (?, ?, ?)`, chunkID, "H", "text"); err != nil {
+		t.Fatalf("insert chunk_fts_seg: %v", err)
+	}
+	if err := db.LogIngest(bookID, "completed", "done"); err != nil {
+		t.Fatalf("log ingest: %v", err)
+	}
 
 	// Delete book should cascade
 	if err := db.DeleteBook(bookID); err != nil {
@@ -230,5 +236,111 @@ func TestCascadeDelete(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM chunk_vec WHERE chunk_id = ?", chunkID).Scan(&count); err != nil {
 		t.Fatalf("count chunk_vec: %v", err)
 	}
-	_ = count // vec0 may or may not cascade, that's ok for PoC
+	if count != 0 {
+		t.Fatalf("chunk_vec count = %d, want 0", count)
+	}
+
+	if err := db.QueryRow("SELECT COUNT(*) FROM chunk_fts_seg WHERE rowid = ?", chunkID).Scan(&count); err != nil {
+		t.Fatalf("count chunk_fts_seg: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("chunk_fts_seg count = %d, want 0", count)
+	}
+
+	if err := db.QueryRow("SELECT COUNT(*) FROM ingest_log WHERE book_id = ?", bookID).Scan(&count); err != nil {
+		t.Fatalf("count ingest_log: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("ingest_log count = %d, want 0", count)
+	}
+}
+
+func TestSaveEmbeddingBatchTx(t *testing.T) {
+	db := setupTestDB(t)
+
+	bookID, _ := db.InsertBook(&Book{Title: "Batch", Format: "pdf", SourcePath: "/tmp/batch.pdf", FileHash: "h-batch"})
+	chapterID, _ := db.InsertChapter(&Chapter{BookID: bookID, Title: "Ch", ChapterOrder: 0})
+	chunk1ID, _ := db.InsertChunk(&Chunk{BookID: bookID, ChapterID: chapterID, Heading: "A", Body: "chunk a", CharCount: 7, ChunkOrder: 0})
+	chunk2ID, _ := db.InsertChunk(&Chunk{BookID: bookID, ChapterID: chapterID, Heading: "B", Body: "chunk b", CharCount: 7, ChunkOrder: 1})
+
+	makeVec := func(val float32) []float32 {
+		vec := make([]float32, 768)
+		vec[0] = val
+		return vec
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := SaveEmbeddingBatchTx(tx, "nomic-embed-text", []int64{chunk1ID, chunk2ID}, [][]float32{makeVec(0.1), makeVec(0.2)}, false); err != nil {
+		t.Fatalf("SaveEmbeddingBatchTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM chunk_vec WHERE chunk_id IN (?, ?)", chunk1ID, chunk2ID).Scan(&count); err != nil {
+		t.Fatalf("count chunk_vec: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("chunk_vec count = %d, want 2", count)
+	}
+
+	var version string
+	if err := db.QueryRow("SELECT embedding_version FROM chunk WHERE chunk_id = ?", chunk1ID).Scan(&version); err != nil {
+		t.Fatalf("embedding_version: %v", err)
+	}
+	if version != "nomic-embed-text" {
+		t.Fatalf("embedding_version = %q, want nomic-embed-text", version)
+	}
+}
+
+func TestSaveEmbeddingBatchTxReplaceExisting(t *testing.T) {
+	db := setupTestDB(t)
+
+	bookID, _ := db.InsertBook(&Book{Title: "Replace", Format: "pdf", SourcePath: "/tmp/replace.pdf", FileHash: "h-replace"})
+	chapterID, _ := db.InsertChapter(&Chapter{BookID: bookID, Title: "Ch", ChapterOrder: 0})
+	chunkID, _ := db.InsertChunk(&Chunk{BookID: bookID, ChapterID: chapterID, Heading: "A", Body: "chunk a", CharCount: 7, ChunkOrder: 0})
+
+	makeVec := func(val float32) []float32 {
+		vec := make([]float32, 768)
+		vec[0] = val
+		return vec
+	}
+
+	if err := db.InsertEmbedding(chunkID, makeVec(0.1)); err != nil {
+		t.Fatalf("InsertEmbedding: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE chunk SET embedding_version = ? WHERE chunk_id = ?`, "old-model", chunkID); err != nil {
+		t.Fatalf("update embedding version: %v", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := SaveEmbeddingBatchTx(tx, "nomic-embed-text", []int64{chunkID}, [][]float32{makeVec(0.9)}, true); err != nil {
+		t.Fatalf("SaveEmbeddingBatchTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM chunk_vec WHERE chunk_id = ?", chunkID).Scan(&count); err != nil {
+		t.Fatalf("count chunk_vec: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("chunk_vec count = %d, want 1", count)
+	}
+
+	var version string
+	if err := db.QueryRow("SELECT embedding_version FROM chunk WHERE chunk_id = ?", chunkID).Scan(&version); err != nil {
+		t.Fatalf("embedding_version: %v", err)
+	}
+	if version != "nomic-embed-text" {
+		t.Fatalf("embedding_version = %q, want nomic-embed-text", version)
+	}
 }

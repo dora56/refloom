@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/dora56/refloom/internal/db"
@@ -12,11 +14,23 @@ import (
 )
 
 var (
-	reindexBookID    int64
-	reindexEmbedding bool
-	reindexFTS       bool
-	reindexLinks     bool
+	reindexBookID      int64
+	reindexEmbedding   bool
+	reindexFTS         bool
+	reindexLinks       bool
+	reindexProfileJSON bool
 )
+
+type reindexEmbeddingProfile struct {
+	Model     string `json:"model"`
+	BatchSize int    `json:"batch_size"`
+	Chunks    int    `json:"chunks"`
+	Batches   int    `json:"batches"`
+	RequestMS int64  `json:"request_ms"`
+	SaveMS    int64  `json:"save_ms"`
+	TotalMS   int64  `json:"total_ms"`
+	Fails     int    `json:"fails"`
+}
 
 var reindexCmd = &cobra.Command{
 	Use:   "reindex",
@@ -29,6 +43,7 @@ func init() {
 	reindexCmd.Flags().BoolVar(&reindexEmbedding, "embedding", false, "Regenerate embeddings only")
 	reindexCmd.Flags().BoolVar(&reindexFTS, "fts", false, "Rebuild FTS index only")
 	reindexCmd.Flags().BoolVar(&reindexLinks, "links", false, "Rebuild prev/next chunk links only")
+	reindexCmd.Flags().BoolVar(&reindexProfileJSON, "profile-json", false, "Print embedding reindex profile as JSON")
 }
 
 func runReindex(cmd *cobra.Command, args []string) error {
@@ -60,8 +75,14 @@ func runReindex(cmd *cobra.Command, args []string) error {
 	}
 
 	if doEmb {
-		if err := rebuildEmbeddings(ctx, database); err != nil {
+		profile, err := rebuildEmbeddings(ctx, database)
+		if err != nil {
 			return fmt.Errorf("rebuild embeddings: %w", err)
+		}
+		if reindexProfileJSON {
+			if err := emitReindexEmbeddingProfile(profile); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -109,10 +130,10 @@ func rebuildFTS(database *db.DB) error {
 	return nil
 }
 
-func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
+func rebuildEmbeddings(ctx context.Context, database *db.DB) (reindexEmbeddingProfile, error) {
 	embedClient := embedding.NewClient(cfg.OllamaURL, cfg.OllamaEmbedModel)
 	if err := embedClient.CheckHealth(ctx); err != nil {
-		return err
+		return reindexEmbeddingProfile{}, err
 	}
 
 	var chunks []*db.Chunk
@@ -120,12 +141,12 @@ func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
 	if reindexBookID > 0 {
 		chunks, err = database.GetChunksByBook(reindexBookID)
 		if err != nil {
-			return fmt.Errorf("get chunks for book %d: %w", reindexBookID, err)
+			return reindexEmbeddingProfile{}, fmt.Errorf("get chunks for book %d: %w", reindexBookID, err)
 		}
 	} else {
 		books, err := database.ListBooks()
 		if err != nil {
-			return fmt.Errorf("list books: %w", err)
+			return reindexEmbeddingProfile{}, fmt.Errorf("list books: %w", err)
 		}
 		for _, b := range books {
 			bookChunks, err := database.GetChunksByBook(b.BookID)
@@ -139,28 +160,41 @@ func rebuildEmbeddings(ctx context.Context, database *db.DB) error {
 
 	slog.Info("regenerating embeddings", "chunks", len(chunks))
 	start := time.Now()
-	fails := 0
-	for i, chunk := range chunks {
-		if i > 0 && i%100 == 0 {
-			slog.Info("embedding progress", "done", i, "total", len(chunks))
-		}
-
-		_ = database.DeleteEmbedding(chunk.ChunkID)
-
-		emb, err := embedClient.Embed(ctx, chunk.Body)
-		if err != nil {
-			slog.Warn("embedding failed", "chunk_id", chunk.ChunkID, "error", err)
-			fails++
-			continue
-		}
-		if err := database.InsertEmbedding(chunk.ChunkID, emb); err != nil {
-			slog.Warn("save embedding failed", "chunk_id", chunk.ChunkID, "error", err)
-			fails++
-		}
+	batchSize := resolvedEmbeddingBatchSize(cfg.EmbeddingBatchSize)
+	inputs := make([]embeddedChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		inputs = append(inputs, embeddedChunk{
+			ChunkID: chunk.ChunkID,
+			Body:    chunk.Body,
+		})
 	}
 
-	slog.Info("embeddings regenerated", "total", len(chunks), "fails", fails, "duration", time.Since(start).Round(time.Millisecond))
-	return nil
+	stats, err := saveChunkEmbeddings(ctx, database, embedClient, cfg.OllamaEmbedModel, batchSize, inputs, true, slog.Default())
+	if err != nil {
+		return reindexEmbeddingProfile{}, err
+	}
+
+	profile := reindexEmbeddingProfile{
+		Model:     cfg.OllamaEmbedModel,
+		BatchSize: batchSize,
+		Chunks:    len(chunks),
+		Batches:   stats.Batches,
+		RequestMS: stats.RequestMS,
+		SaveMS:    stats.SaveMS,
+		TotalMS:   time.Since(start).Milliseconds(),
+		Fails:     stats.Fails,
+	}
+
+	slog.Info("embeddings regenerated",
+		"total", len(chunks),
+		"fails", stats.Fails,
+		"batch_size", batchSize,
+		"batches", stats.Batches,
+		"request_ms", stats.RequestMS,
+		"save_ms", stats.SaveMS,
+		"duration", time.Duration(profile.TotalMS)*time.Millisecond,
+	)
+	return profile, nil
 }
 
 func rebuildChunkLinks(database *db.DB) error {
@@ -202,4 +236,9 @@ func rebuildChunkLinks(database *db.DB) error {
 
 	slog.Info("chunk links rebuilt", "linked", linked, "duration", time.Since(start).Round(time.Millisecond))
 	return nil
+}
+
+func emitReindexEmbeddingProfile(profile reindexEmbeddingProfile) error {
+	enc := json.NewEncoder(os.Stdout)
+	return enc.Encode(profile)
 }

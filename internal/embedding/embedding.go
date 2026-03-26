@@ -16,16 +16,22 @@ type Client struct {
 	BaseURL    string
 	Model      string
 	MaxRetries int
+	HTTPClient *http.Client
 }
 
 // NewClient creates a new embedding client.
 func NewClient(baseURL, model string) *Client {
-	return &Client{BaseURL: baseURL, Model: model, MaxRetries: 3}
+	return &Client{
+		BaseURL:    baseURL,
+		Model:      model,
+		MaxRetries: 3,
+		HTTPClient: http.DefaultClient,
+	}
 }
 
 type embeddingRequest struct {
 	Model string `json:"model"`
-	Input string `json:"input"`
+	Input any    `json:"input"`
 }
 
 type embeddingResponse struct {
@@ -34,11 +40,27 @@ type embeddingResponse struct {
 
 // Embed generates an embedding for the given text, with retry on transient failures.
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	results, err := c.embedWithRetry(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	return results[0], nil
+}
+
+// EmbedBatch generates embeddings for the given texts, with retry on transient failures.
+func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	return c.embedWithRetry(ctx, texts)
+}
+
+func (c *Client) embedWithRetry(ctx context.Context, input any) ([][]float32, error) {
 	delays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
 
 	var lastErr error
 	for attempt := range c.MaxRetries {
-		result, err := c.embedOnce(ctx, text)
+		result, err := c.embedOnce(ctx, input)
 		if err == nil {
 			return result, nil
 		}
@@ -56,8 +78,8 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return nil, fmt.Errorf("embedding failed after %d attempts: %w", c.MaxRetries, lastErr)
 }
 
-func (c *Client) embedOnce(ctx context.Context, text string) ([]float32, error) {
-	reqBody := embeddingRequest{Model: c.Model, Input: text}
+func (c *Client) embedOnce(ctx context.Context, input any) ([][]float32, error) {
+	reqBody := embeddingRequest{Model: c.Model, Input: input}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
@@ -69,7 +91,12 @@ func (c *Client) embedOnce(ctx context.Context, text string) ([]float32, error) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -86,16 +113,22 @@ func (c *Client) embedOnce(ctx context.Context, text string) ([]float32, error) 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	if len(result.Embeddings) == 0 || len(result.Embeddings[0]) == 0 {
+	if len(result.Embeddings) == 0 {
 		return nil, fmt.Errorf("empty embedding returned")
 	}
 
-	f64 := result.Embeddings[0]
-	f32 := make([]float32, len(f64))
-	for i, v := range f64 {
-		f32[i] = float32(v)
+	embeddings := make([][]float32, 0, len(result.Embeddings))
+	for _, f64 := range result.Embeddings {
+		if len(f64) == 0 {
+			return nil, fmt.Errorf("empty embedding returned")
+		}
+		f32 := make([]float32, len(f64))
+		for i, v := range f64 {
+			f32[i] = float32(v)
+		}
+		embeddings = append(embeddings, f32)
 	}
-	return f32, nil
+	return embeddings, nil
 }
 
 // CheckHealth verifies Ollama is running and the model is available.
@@ -107,7 +140,12 @@ func (c *Client) CheckHealth(ctx context.Context) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ollama not reachable at %s: %w\nStart it with: ollama serve", c.BaseURL, err)
 	}

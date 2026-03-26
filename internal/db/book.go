@@ -103,9 +103,47 @@ func (db *DB) ListBooks() ([]*Book, error) {
 
 // DeleteBook deletes a book and all related data (cascades).
 func (db *DB) DeleteBook(bookID int64) error {
-	_, err := db.Exec("DELETE FROM book WHERE book_id = ?", bookID)
+	tx, err := db.Begin()
 	if err != nil {
+		return fmt.Errorf("begin delete book tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.Exec(
+		`UPDATE chunk
+		 SET prev_chunk_id = NULL, next_chunk_id = NULL
+		 WHERE book_id = ?`,
+		bookID,
+	); err != nil {
+		return fmt.Errorf("clear chunk links: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`DELETE FROM chunk_vec
+		 WHERE chunk_id IN (SELECT chunk_id FROM chunk WHERE book_id = ?)`,
+		bookID,
+	); err != nil {
+		return fmt.Errorf("delete embeddings: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`DELETE FROM chunk_fts_seg
+		 WHERE rowid IN (SELECT chunk_id FROM chunk WHERE book_id = ?)`,
+		bookID,
+	); err != nil {
+		return fmt.Errorf("delete segmented fts rows: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM ingest_log WHERE book_id = ?", bookID); err != nil {
+		return fmt.Errorf("delete ingest log: %w", err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM book WHERE book_id = ?", bookID); err != nil {
 		return fmt.Errorf("delete book: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete book tx: %w", err)
 	}
 	return nil
 }

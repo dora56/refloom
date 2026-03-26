@@ -31,6 +31,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	checks = append(checks, checkOllama())
 	checks = append(checks, checkPythonWorker())
 	checks = append(checks, checkDisk())
+	checks = append(checks, checkAutoExtract())
 
 	hasFailure := false
 	for _, c := range checks {
@@ -123,4 +124,21 @@ func checkDisk() CheckResult {
 
 	sizeMB := float64(stat.Size()) / 1024 / 1024
 	return CheckResult{Name: "Disk", Status: "ok", Detail: fmt.Sprintf("database size: %.1f MB", sizeMB)}
+}
+
+func checkAutoExtract() CheckResult {
+	host := observeHostExtractCapacity()
+	status := "ok"
+	if autoExtractObservationDegraded(host) {
+		status = "warn"
+	}
+	return CheckResult{
+		Name:   "Auto Extract",
+		Status: status,
+		Detail: doctorAutoExtractDetail(host, cfg.ExtractAutoMaxWorkers),
+	}
+}
+
+func autoExtractObservationDegraded(host hostExtractObservation) bool {
+	return host.PerfCores <= 0 || host.TotalMemBytes == 0 || host.FreeMemBytes == 0
 }
