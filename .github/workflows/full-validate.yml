@@ -1,0 +1,71 @@
+name: Full Validate
+
+on:
+  workflow_dispatch:
+    inputs:
+      books_dir:
+        description: "Optional local books directory on the self-hosted runner"
+        required: false
+        type: string
+  schedule:
+    - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, macOS, ARM64]
+    env:
+      BOOKS_DIR_INPUT: ${{ inputs.books_dir }}
+      BOOKS_DIR_DEFAULT: ${{ vars.REFLOOM_VALIDATE_BOOKS_DIR }}
+      REFLOOM_DB_PATH: ${{ runner.temp }}/refloom-full-validate-${{ github.run_id }}-${{ github.run_attempt }}.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Resolve books directory
+        id: books
+        run: |
+          set -euo pipefail
+          BOOKS_DIR="${BOOKS_DIR_INPUT:-${BOOKS_DIR_DEFAULT:-}}"
+          if [[ -z "$BOOKS_DIR" ]]; then
+            echo "REFLOOM_VALIDATE_BOOKS_DIR is not configured." >&2
+            exit 1
+          fi
+          if [[ ! -d "$BOOKS_DIR" ]]; then
+            echo "Books directory not found: $BOOKS_DIR" >&2
+            exit 1
+          fi
+          echo "books_dir=$BOOKS_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Ollama availability
+        run: |
+          set -euo pipefail
+          ollama list >/dev/null
+
+      - name: Sync Python worker dependencies
+        run: cd python/refloom_worker && uv sync --group dev
+
+      - name: Build binary
+        run: make build
+
+      - name: Run full validate
+        id: validate
+        run: |
+          set -euo pipefail
+          ./scripts/validate_refloom.sh "${{ steps.books.outputs.books_dir }}"
+          LATEST_DIR=$(find validation-results -maxdepth 1 -mindepth 1 -type d | sort | tail -1)
+          echo "artifact_dir=$LATEST_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validation artifacts
+        if: ${{ steps.validate.outputs.artifact_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-validate-${{ github.run_id }}
+          path: ${{ steps.validate.outputs.artifact_dir }}

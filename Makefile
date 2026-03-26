@@ -1,4 +1,4 @@
-.PHONY: build test clean python-setup lint lint-python test-python fix-check ci dist validate changelog setup-hooks
+.PHONY: build test clean python-setup lint lint-python test-python fix-check ci dist validate validate-fresh validate-ingest benchmark-extract benchmark-embedding changelog setup-hooks
 
 BINARY := refloom
 BUILD_DIR := bin
@@ -56,6 +56,18 @@ changelog:
 
 validate: build
 	./scripts/validate_refloom.sh
+
+validate-fresh: build
+	VALIDATE_FRESH_DB=1 ./scripts/validate_refloom.sh
+
+validate-ingest: build
+	VALIDATE_FRESH_DB=1 VALIDATE_SKIP_INSPECT=1 VALIDATE_SKIP_SEARCH=1 VALIDATE_SKIP_ASK=1 VALIDATE_SKIP_SCORE=1 ./scripts/validate_refloom.sh
+
+benchmark-extract: build
+	./scripts/benchmark_extract.sh
+
+benchmark-embedding: build
+	./scripts/benchmark_embedding.sh
 
 dist: build
 	rm -rf $(DIST_DIR)

@@ -1,3 +1,11 @@
+# Refloom
+tmp/
+logs/
+coverage/
+dist/
+build/
+*.egg-info/
+
 # Books (copyrighted content)
 books/
 
