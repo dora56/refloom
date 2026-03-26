@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 )
 
 // Verify PersistentWorker implements Extractor at compile time.
@@ -31,6 +32,7 @@ type PersistentWorker struct {
 	workerDir  string
 	pool       chan *persistentProcess
 	poolSize   int
+	aliveCount atomic.Int32
 	mu         sync.Mutex
 }
 
@@ -52,6 +54,7 @@ func NewPersistentWorker(pythonPath, workerDir string, poolSize int) (*Persisten
 			pw.Close()
 			return nil, fmt.Errorf("spawn persistent worker: %w", err)
 		}
+		pw.aliveCount.Add(1)
 		pw.pool <- proc
 	}
 	slog.Debug("persistent worker pool started", "size", poolSize)
@@ -119,6 +122,7 @@ func (pw *PersistentWorker) sendCommand(ctx context.Context, reqBody any, respBo
 		pw.killProcess(proc)
 		newProc, spawnErr := pw.spawnProcess()
 		if spawnErr != nil {
+			pw.aliveCount.Add(-1)
 			return fmt.Errorf("respawn failed: %w (original: %w)", spawnErr, writeErr)
 		}
 		pw.pool <- newProc
@@ -153,6 +157,7 @@ func (pw *PersistentWorker) sendCommand(ctx context.Context, reqBody any, respBo
 			pw.killProcess(proc)
 			newProc, spawnErr := pw.spawnProcess()
 			if spawnErr != nil {
+				pw.aliveCount.Add(-1)
 				return fmt.Errorf("respawn failed: %w (original: %w)", spawnErr, err)
 			}
 			pw.pool <- newProc
@@ -166,6 +171,7 @@ func (pw *PersistentWorker) sendCommand(ctx context.Context, reqBody any, respBo
 		pw.killProcess(proc)
 		newProc, spawnErr := pw.spawnProcess()
 		if spawnErr != nil {
+			pw.aliveCount.Add(-1)
 			slog.Warn("respawn after cancel failed", "error", spawnErr)
 		} else {
 			pw.pool <- newProc
@@ -191,9 +197,14 @@ func (pw *PersistentWorker) Close() {
 	pw.mu.Lock()
 	defer pw.mu.Unlock()
 
-	// Wait for all workers to return to the pool (blocks until in-flight commands finish)
-	for range pw.poolSize {
+	// Drain all alive workers from the pool
+	for {
+		alive := int(pw.aliveCount.Load())
+		if alive <= 0 {
+			break
+		}
 		proc := <-pw.pool
+		pw.aliveCount.Add(-1)
 		shutdownReq, _ := json.Marshal(map[string]string{"command": "shutdown"})
 		proc.mu.Lock()
 		proc.stdin.Write(append(shutdownReq, '\n')) //nolint:errcheck,gosec
