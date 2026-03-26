@@ -24,6 +24,7 @@ var (
 	ingestTags          []string
 	ingestProfileJSON   bool
 	ingestSkipEmbedding bool
+	ingestKeepWork      bool
 )
 
 const embeddingBatchSize = 64
@@ -101,6 +102,7 @@ func init() {
 	ingestCmd.Flags().StringSliceVar(&ingestTags, "tag", nil, "Add tags to the book")
 	ingestCmd.Flags().BoolVar(&ingestProfileJSON, "profile-json", false, "Print one JSON ingest profile per processed book")
 	ingestCmd.Flags().BoolVar(&ingestSkipEmbedding, "skip-embedding", false, "Skip embedding generation after extract + DB/FTS")
+	ingestCmd.Flags().BoolVar(&ingestKeepWork, "keep-work", false, "Keep work directory after successful ingest")
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
@@ -134,6 +136,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var failCount int
 	for i, file := range files {
 		if ingestProfileJSON {
 			fmt.Fprintf(os.Stderr, "[%d/%d] Processing %s...\n", i+1, len(files), filepath.Base(file))
@@ -148,11 +151,15 @@ func runIngest(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if err != nil {
+			failCount++
 			slog.Error("ingest failed", "file", filepath.Base(file), "error", err)
 			continue
 		}
 	}
 
+	if failCount > 0 {
+		return fmt.Errorf("%d of %d files failed to ingest", failCount, len(files))
+	}
 	return nil
 }
 
@@ -435,6 +442,11 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 	if ingestSkipEmbedding {
 		applyEmbeddingSkippedProfile(profile)
 		_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, embedding skipped", len(insertedChunks)))
+		if profile.JobDir != "" && !ingestKeepWork {
+			if removeErr := os.RemoveAll(profile.JobDir); removeErr != nil {
+				slog.Warn("failed to clean up work directory", "dir", profile.JobDir, "error", removeErr)
+			}
+		}
 		log.Info("done",
 			"title", resp.Book.Title,
 			"chapters", len(resp.Chapters),
@@ -461,8 +473,20 @@ func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker,
 
 	if embedStats.Fails > 0 {
 		_ = database.LogIngest(bookID, "embedded", fmt.Sprintf("%d/%d succeeded", len(insertedChunks)-embedStats.Fails, len(insertedChunks)))
+		if shouldWarnEmbeddingFailures(embedStats.Fails, len(embedInputs)) {
+			slog.Warn("embedding failure rate exceeds 50%; book is FTS-searchable but vector search will be degraded",
+				"fails", embedStats.Fails, "total", len(embedInputs),
+				"ratio", fmt.Sprintf("%.0f%%", float64(embedStats.Fails)/float64(len(embedInputs))*100))
+		}
 	}
 	_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, %d embed failures", len(insertedChunks), embedStats.Fails))
+
+	// Clean up work directory after successful ingest
+	if profile.JobDir != "" && !ingestKeepWork {
+		if removeErr := os.RemoveAll(profile.JobDir); removeErr != nil {
+			slog.Warn("failed to clean up work directory", "dir", profile.JobDir, "error", removeErr)
+		}
+	}
 
 	log.Info("done",
 		"title", resp.Book.Title,
@@ -609,6 +633,13 @@ func shouldLogEmbeddingProgress(previous, current int) bool {
 	}
 
 	return previous/embeddingProgressInterval != current/embeddingProgressInterval
+}
+
+func shouldWarnEmbeddingFailures(fails, total int) bool {
+	if total <= 0 {
+		return false
+	}
+	return float64(fails)/float64(total) > 0.5
 }
 
 func resolvedEmbeddingBatchSize(configured int) int {

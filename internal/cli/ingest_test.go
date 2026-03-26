@@ -136,6 +136,34 @@ func TestResolveConfiguredWorkerDir(t *testing.T) {
 	}
 }
 
+func TestShouldWarnEmbeddingFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		fails int
+		total int
+		want  bool
+	}{
+		{name: "no failures", fails: 0, total: 100, want: false},
+		{name: "49 percent", fails: 49, total: 100, want: false},
+		{name: "50 percent", fails: 50, total: 100, want: false},
+		{name: "51 percent", fails: 51, total: 100, want: true},
+		{name: "all failed", fails: 10, total: 10, want: true},
+		{name: "zero total", fails: 0, total: 0, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := shouldWarnEmbeddingFailures(tc.fails, tc.total); got != tc.want {
+				t.Fatalf("shouldWarnEmbeddingFailures(%d, %d) = %v, want %v", tc.fails, tc.total, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplyEmbeddingSkippedProfile(t *testing.T) {
 	t.Parallel()
 
