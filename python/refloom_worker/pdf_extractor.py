@@ -102,7 +102,9 @@ def _ocr_cache_put(file_hash: str | None, page_num: int, render_scale: float, re
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = _ocr_cache_key(file_hash, page_num, render_scale, recognition_level)
     path = cache_dir / f"{key}.json"
-    path.write_text(json.dumps({"text": text}, ensure_ascii=False), encoding="utf-8")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"text": text}, ensure_ascii=False), encoding="utf-8")
+    tmp.rename(path)
 
 
 def extract_pdf_pages(

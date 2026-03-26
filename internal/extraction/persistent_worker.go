@@ -186,24 +186,20 @@ func (pw *PersistentWorker) killProcess(proc *persistentProcess) {
 	}
 }
 
-// Close shuts down all workers gracefully.
+// Close shuts down all workers gracefully, waiting for in-flight commands to finish.
 func (pw *PersistentWorker) Close() {
 	pw.mu.Lock()
 	defer pw.mu.Unlock()
 
-	// Drain pool and send shutdown to each worker
-	for {
-		select {
-		case proc := <-pw.pool:
-			shutdownReq, _ := json.Marshal(map[string]string{"command": "shutdown"})
-			proc.mu.Lock()
-			proc.stdin.Write(append(shutdownReq, '\n')) //nolint:errcheck,gosec
-			proc.stdin.Close()                          //nolint:errcheck,gosec
-			proc.mu.Unlock()
-			proc.cmd.Wait() //nolint:errcheck,gosec
-		default:
-			return
-		}
+	// Wait for all workers to return to the pool (blocks until in-flight commands finish)
+	for range pw.poolSize {
+		proc := <-pw.pool
+		shutdownReq, _ := json.Marshal(map[string]string{"command": "shutdown"})
+		proc.mu.Lock()
+		proc.stdin.Write(append(shutdownReq, '\n')) //nolint:errcheck,gosec
+		proc.stdin.Close()                          //nolint:errcheck,gosec
+		proc.mu.Unlock()
+		proc.cmd.Wait() //nolint:errcheck,gosec
 	}
 }
 
