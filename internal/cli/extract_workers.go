@@ -335,7 +335,11 @@ func parseVMStatFreeBytes(raw []byte) (uint64, error) {
 			}
 			rest := after
 			rest = strings.TrimSpace(strings.TrimSuffix(rest, "bytes)"))
-			value, err := strconv.ParseUint(strings.Fields(rest)[0], 10, 64)
+			fields := strings.Fields(rest)
+			if len(fields) == 0 {
+				continue
+			}
+			value, err := strconv.ParseUint(fields[0], 10, 64)
 			if err != nil {
 				return 0, fmt.Errorf("parse vm_stat page size: %w", err)
 			}

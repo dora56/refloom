@@ -87,6 +87,17 @@ func TestDoctorAutoExtractDetailIncludesTierAndCaps(t *testing.T) {
 	}
 }
 
+func TestParseVMStatFreeBytesEmptyPageSize(t *testing.T) {
+	t.Parallel()
+
+	// "page size of" followed by only whitespace should not panic
+	output := []byte("Mach Virtual Memory Statistics: (page size of   )\nPages free:                               1024.\n")
+	_, err := parseVMStatFreeBytes(output)
+	if err == nil {
+		t.Fatal("expected error for missing page size value")
+	}
+}
+
 func TestAutoExtractObservationDegraded(t *testing.T) {
 	t.Parallel()
 

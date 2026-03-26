@@ -596,7 +596,6 @@ func mergePageBatches(outputPath string, batches []extractCompletedBatch) error 
 	defer outFile.Close() //nolint:errcheck
 
 	writer := bufio.NewWriter(outFile)
-	defer writer.Flush() //nolint:errcheck
 
 	for _, batch := range batches {
 		inFile, err := os.Open(batch.OutputPath) //nolint:gosec
@@ -620,6 +619,9 @@ func mergePageBatches(outputPath string, batches []extractCompletedBatch) error 
 		}(); err != nil {
 			return err
 		}
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush merged pages: %w", err)
 	}
 	return nil
 }
