@@ -10,6 +10,16 @@ import (
 	"path/filepath"
 )
 
+// Extractor defines the extraction operations used by the ingest pipeline.
+type Extractor interface {
+	Probe(ctx context.Context, bookPath, format string) (*ProbeResponse, error)
+	ExtractPages(ctx context.Context, req ExtractPagesRequest) (*ExtractPagesResponse, error)
+	Chunk(ctx context.Context, req ChunkRequest) (*ChunkResponse, error)
+}
+
+// Verify Worker implements Extractor at compile time.
+var _ Extractor = (*Worker)(nil)
+
 // Worker manages Python subprocess extraction.
 type Worker struct {
 	PythonPath string

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,28 @@ import (
 	"github.com/dora56/refloom/internal/config"
 	"github.com/dora56/refloom/internal/extraction"
 )
+
+// mockExtractor implements extraction.Extractor for testing.
+type mockExtractor struct {
+	probeResp      *extraction.ProbeResponse
+	extractPagesFn func(ctx context.Context, req extraction.ExtractPagesRequest) (*extraction.ExtractPagesResponse, error)
+	chunkResp      *extraction.ChunkResponse
+}
+
+func (m *mockExtractor) Probe(_ context.Context, _, _ string) (*extraction.ProbeResponse, error) {
+	return m.probeResp, nil
+}
+
+func (m *mockExtractor) ExtractPages(ctx context.Context, req extraction.ExtractPagesRequest) (*extraction.ExtractPagesResponse, error) {
+	if m.extractPagesFn != nil {
+		return m.extractPagesFn(ctx, req)
+	}
+	return &extraction.ExtractPagesResponse{PagesWritten: req.PageEnd - req.PageStart + 1}, nil
+}
+
+func (m *mockExtractor) Chunk(_ context.Context, _ extraction.ChunkRequest) (*extraction.ChunkResponse, error) {
+	return m.chunkResp, nil
+}
 
 func TestBuildPageBatchRanges(t *testing.T) {
 	t.Parallel()
@@ -505,4 +528,145 @@ func TestResolveExtractWorkerPlanAutoPendingBatchCapRoundsDownToCandidate(t *tes
 	if plan.Used != 2 {
 		t.Fatalf("Used = %d, want 2", plan.Used)
 	}
+}
+
+func setupCfgForTest(t *testing.T) {
+	t.Helper()
+	cfg = config.DefaultConfig()
+	t.Cleanup(func() { cfg = nil })
+}
+
+func TestExtractBatchesConcurrentAllSucceed(t *testing.T) {
+	setupCfgForTest(t)
+
+	dir := t.TempDir()
+	jobDir := filepath.Join(dir, "job")
+	pagesDir := filepath.Join(jobDir, "pages")
+	if err := os.MkdirAll(pagesDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockExtractor{
+		extractPagesFn: func(_ context.Context, req extraction.ExtractPagesRequest) (*extraction.ExtractPagesResponse, error) {
+			// Write a dummy JSONL file at OutputPath
+			content := fmt.Sprintf("{\"page_num\":%d}\n", req.PageStart)
+			if err := os.WriteFile(req.OutputPath, []byte(content), 0o600); err != nil {
+				return nil, err
+			}
+			return &extraction.ExtractPagesResponse{
+				PagesWritten: req.PageEnd - req.PageStart + 1,
+				BatchMS:      10,
+				Stats:        extraction.Stats{},
+			}, nil
+		},
+	}
+
+	manifest := &extractJobManifest{JobID: "test", Status: "extracting"}
+	pending := []pageBatchRange{
+		{PageStart: 1, PageEnd: 16},
+		{PageStart: 17, PageEnd: 32},
+		{PageStart: 33, PageEnd: 48},
+		{PageStart: 49, PageEnd: 64},
+	}
+
+	ctx := context.Background()
+	err := extractBatchesConcurrent(ctx, mock, "/tmp/test.pdf", "pdf", jobDir, manifest, pending, 2)
+	if err != nil {
+		t.Fatalf("extractBatchesConcurrent: %v", err)
+	}
+	if len(manifest.Completed) != 4 {
+		t.Fatalf("completed batches = %d, want 4", len(manifest.Completed))
+	}
+}
+
+func TestExtractBatchesConcurrentOneFailsCancelsRest(t *testing.T) {
+	setupCfgForTest(t)
+	// Use short timeout to speed up test with backoff
+	cfg.Timeouts.WorkerBatch = 5 * time.Second
+
+	dir := t.TempDir()
+	jobDir := filepath.Join(dir, "job")
+	pagesDir := filepath.Join(jobDir, "pages")
+	if err := os.MkdirAll(pagesDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockExtractor{
+		extractPagesFn: func(_ context.Context, req extraction.ExtractPagesRequest) (*extraction.ExtractPagesResponse, error) {
+			if req.PageStart == 17 {
+				return nil, fmt.Errorf("simulated failure for batch starting at page 17")
+			}
+			content := fmt.Sprintf("{\"page_num\":%d}\n", req.PageStart)
+			if err := os.WriteFile(req.OutputPath, []byte(content), 0o600); err != nil {
+				return nil, err
+			}
+			return &extraction.ExtractPagesResponse{
+				PagesWritten: req.PageEnd - req.PageStart + 1,
+				BatchMS:      10,
+			}, nil
+		},
+	}
+
+	manifest := &extractJobManifest{JobID: "test", Status: "extracting"}
+	pending := []pageBatchRange{
+		{PageStart: 1, PageEnd: 16},
+		{PageStart: 17, PageEnd: 32},
+		{PageStart: 33, PageEnd: 48},
+		{PageStart: 49, PageEnd: 64},
+	}
+
+	ctx := context.Background()
+	err := extractBatchesConcurrent(ctx, mock, "/tmp/test.pdf", "pdf", jobDir, manifest, pending, 2)
+	if err == nil {
+		t.Fatal("expected error from failed batch")
+	}
+	if !strings.Contains(err.Error(), "17-32") {
+		t.Fatalf("error = %q, want mention of pages 17-32", err)
+	}
+}
+
+func TestExtractBatchesConcurrentContextCancel(t *testing.T) {
+	setupCfgForTest(t)
+
+	dir := t.TempDir()
+	jobDir := filepath.Join(dir, "job")
+	pagesDir := filepath.Join(jobDir, "pages")
+	if err := os.MkdirAll(pagesDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockExtractor{
+		extractPagesFn: func(ctx context.Context, req extraction.ExtractPagesRequest) (*extraction.ExtractPagesResponse, error) {
+			// Slow extraction to give time for cancellation
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+			content := fmt.Sprintf("{\"page_num\":%d}\n", req.PageStart)
+			if err := os.WriteFile(req.OutputPath, []byte(content), 0o600); err != nil {
+				return nil, err
+			}
+			return &extraction.ExtractPagesResponse{PagesWritten: 1, BatchMS: 50}, nil
+		},
+	}
+
+	manifest := &extractJobManifest{JobID: "test", Status: "extracting"}
+	pending := []pageBatchRange{
+		{PageStart: 1, PageEnd: 16},
+		{PageStart: 17, PageEnd: 32},
+		{PageStart: 33, PageEnd: 48},
+		{PageStart: 49, PageEnd: 64},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a short delay
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		cancel()
+	}()
+
+	err := extractBatchesConcurrent(ctx, mock, "/tmp/test.pdf", "pdf", jobDir, manifest, pending, 2)
+	// Should complete without deadlock. Error may or may not be nil depending on timing.
+	_ = err
 }

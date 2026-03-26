@@ -163,7 +163,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func ingestFile(ctx context.Context, database *db.DB, worker *extraction.Worker, embedClient *embedding.Client, filePath string) (_ *ingestProfile, err error) {
+func ingestFile(ctx context.Context, database *db.DB, worker extraction.Extractor, embedClient *embedding.Client, filePath string) (_ *ingestProfile, err error) {
 	totalStart := time.Now()
 
 	absPath, err := filepath.Abs(filePath)

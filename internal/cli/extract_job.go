@@ -109,7 +109,7 @@ type extractPagesResult struct {
 	err       error
 }
 
-func runStagedExtraction(ctx context.Context, worker *extraction.Worker, absPath, format, jobID string) (*stagedExtractResult, error) {
+func runStagedExtraction(ctx context.Context, worker extraction.Extractor, absPath, format, jobID string) (*stagedExtractResult, error) {
 	start := time.Now()
 	jobDir, manifest, resumed, err := prepareExtractJob(absPath, format, jobID)
 	if err != nil {
@@ -176,7 +176,7 @@ func runStagedExtraction(ctx context.Context, worker *extraction.Worker, absPath
 	}, nil
 }
 
-func probeAndPrepareManifest(ctx context.Context, worker *extraction.Worker, absPath, format, jobDir string, manifest *extractJobManifest) (*extraction.ProbeResponse, error) {
+func probeAndPrepareManifest(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, manifest *extractJobManifest) (*extraction.ProbeResponse, error) {
 	probeCtx, probeCancel := context.WithTimeout(ctx, cfg.Timeouts.WorkerProbe)
 	probeStart := time.Now()
 	probeResp, err := worker.Probe(probeCtx, absPath, format)
@@ -205,7 +205,7 @@ func probeAndPrepareManifest(ctx context.Context, worker *extraction.Worker, abs
 
 func extractPageBatches(
 	ctx context.Context,
-	worker *extraction.Worker,
+	worker extraction.Extractor,
 	absPath, format, jobDir string,
 	manifest *extractJobManifest,
 	ranges []pageBatchRange,
@@ -259,7 +259,7 @@ func extractPageBatches(
 	return plan, extractBatchesConcurrent(ctx, worker, absPath, format, jobDir, manifest, pending, plan.Used)
 }
 
-func extractBatchesSequential(ctx context.Context, worker *extraction.Worker, absPath, format, jobDir string, manifest *extractJobManifest, pending []pageBatchRange) error {
+func extractBatchesSequential(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, manifest *extractJobManifest, pending []pageBatchRange) error {
 	for _, batch := range pending {
 		result := runExtractBatch(ctx, worker, absPath, format, jobDir, batch)
 		if err := applyExtractBatchResult(jobDir, manifest, result); err != nil {
@@ -272,7 +272,7 @@ func extractBatchesSequential(ctx context.Context, worker *extraction.Worker, ab
 	return nil
 }
 
-func extractBatchesConcurrent(ctx context.Context, worker *extraction.Worker, absPath, format, jobDir string, manifest *extractJobManifest, pending []pageBatchRange, workers int) error {
+func extractBatchesConcurrent(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, manifest *extractJobManifest, pending []pageBatchRange, workers int) error {
 	extractCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -327,7 +327,7 @@ func extractBatchesConcurrent(ctx context.Context, worker *extraction.Worker, ab
 	return firstErr
 }
 
-func runExtractBatch(ctx context.Context, worker *extraction.Worker, absPath, format, jobDir string, batch pageBatchRange) extractPagesResult {
+func runExtractBatch(ctx context.Context, worker extraction.Extractor, absPath, format, jobDir string, batch pageBatchRange) extractPagesResult {
 	result := extractPagesResult{batch: batch}
 	for attempt := 1; attempt <= maxBatchAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -400,7 +400,7 @@ func finalizePageExtractMetrics(manifest *extractJobManifest, elapsed time.Durat
 	manifest.PageExtractMS = elapsed.Milliseconds()
 }
 
-func finalizeExtractJob(ctx context.Context, worker *extraction.Worker, format, jobDir string, manifest *extractJobManifest, start time.Time, workerPlan extractWorkerPlan) (*extraction.ChunkResponse, []extraction.ChunkInfo, error) {
+func finalizeExtractJob(ctx context.Context, worker extraction.Extractor, format, jobDir string, manifest *extractJobManifest, start time.Time, workerPlan extractWorkerPlan) (*extraction.ChunkResponse, []extraction.ChunkInfo, error) {
 	if err := mergePageBatches(manifest.PagesPath, manifest.Completed); err != nil {
 		return nil, nil, fmt.Errorf("merge page batches: %w", err)
 	}
