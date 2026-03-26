@@ -69,7 +69,7 @@ def test_handle_extract_pages_pdf(monkeypatch, capsys, tmp_path):
 
     monkeypatch.setattr(
         "refloom_worker.pdf_extractor.extract_pdf_pages",
-        lambda path, start, end, ocr_policy: {"pages": mock_pages, "stats": {"ocr_pages": 0}},
+        lambda path, start, end, ocr_policy, file_hash=None: {"pages": mock_pages, "stats": {"ocr_pages": 0}},
     )
 
     _handle_extract_pages({

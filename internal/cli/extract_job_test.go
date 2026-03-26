@@ -114,6 +114,26 @@ func TestMergePageBatches(t *testing.T) {
 	}
 }
 
+func TestResolveOCRPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mode string
+		want string
+	}{
+		{"ocr-heavy", "accurate-only"},
+		{"OCR-HEAVY", "accurate-only"},
+		{"text", "auto"},
+		{"", "auto"},
+		{"mixed", "auto"},
+	}
+	for _, tc := range tests {
+		if got := resolveOCRPolicy(tc.mode); got != tc.want {
+			t.Errorf("resolveOCRPolicy(%q) = %q, want %q", tc.mode, got, tc.want)
+		}
+	}
+}
+
 func TestWriteJSONFileAtomic(t *testing.T) {
 	t.Parallel()
 

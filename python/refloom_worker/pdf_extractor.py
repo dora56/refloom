@@ -1,9 +1,12 @@
 """PDF extraction using PyMuPDF (fitz) with optional Vision Framework OCR."""
 
+import hashlib
+import json
 import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import fitz
 
@@ -70,7 +73,42 @@ def close_cached_doc():
         _cached_doc = None
 
 
-def extract_pdf_pages(path: str, page_start: int, page_end: int, ocr_policy: str = "auto") -> dict:
+def _ocr_cache_dir() -> Path:
+    return Path.home() / ".refloom" / "cache" / "ocr"
+
+
+def _ocr_cache_key(file_hash: str, page_num: int, render_scale: float, recognition_level: int) -> str:
+    raw = f"{file_hash}:{page_num}:{render_scale}:{recognition_level}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _ocr_cache_get(file_hash: str | None, page_num: int, render_scale: float, recognition_level: int) -> str | None:
+    if not file_hash:
+        return None
+    key = _ocr_cache_key(file_hash, page_num, render_scale, recognition_level)
+    path = _ocr_cache_dir() / f"{key}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))["text"]
+        except (json.JSONDecodeError, KeyError):
+            return None
+    return None
+
+
+def _ocr_cache_put(file_hash: str | None, page_num: int, render_scale: float, recognition_level: int, text: str):
+    if not file_hash:
+        return
+    cache_dir = _ocr_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = _ocr_cache_key(file_hash, page_num, render_scale, recognition_level)
+    path = cache_dir / f"{key}.json"
+    path.write_text(json.dumps({"text": text}, ensure_ascii=False), encoding="utf-8")
+
+
+def extract_pdf_pages(
+    path: str, page_start: int, page_end: int,
+    ocr_policy: str = "auto", file_hash: str | None = None,
+) -> dict:
     """Extract a bounded PDF page range with OCR fallback."""
     doc = _get_cached_doc(path)
     page_end = min(page_end, len(doc))
@@ -92,30 +130,52 @@ def extract_pdf_pages(path: str, page_start: int, page_end: int, ocr_policy: str
         should_try_ocr = ocr_policy != "never" and not text.strip() and ocr_available
         if should_try_ocr:
             stats["ocr_pages"] += 1
-            stats["ocr_fast_pages"] += 1
-            fast_start = time.perf_counter()
-            fast_text = _ocr_page(
-                page,
-                render_scale=ocr_settings.fast_render_scale,
-                recognition_level=_FAST_RECOGNITION_LEVEL,
-            )
-            fast_elapsed_ms = _elapsed_ms(fast_start)
-            stats["ocr_fast_ms"] += fast_elapsed_ms
-            stats["ocr_ms"] += fast_elapsed_ms
-            text = fast_text
-            if _non_space_len(fast_text) < ocr_settings.retry_min_chars:
-                stats["ocr_retries"] += 1
-                stats["ocr_retry_pages"] += 1
-                retry_start = time.perf_counter()
-                accurate_text = _ocr_page(
-                    page,
-                    render_scale=ocr_settings.accurate_render_scale,
-                    recognition_level=_ACCURATE_RECOGNITION_LEVEL,
+            if ocr_policy == "accurate-only":
+                # Skip fast pass; go straight to accurate OCR
+                cached = _ocr_cache_get(
+                    file_hash, page_num, ocr_settings.accurate_render_scale, _ACCURATE_RECOGNITION_LEVEL,
                 )
-                retry_elapsed_ms = _elapsed_ms(retry_start)
-                stats["ocr_retry_ms"] += retry_elapsed_ms
-                stats["ocr_ms"] += retry_elapsed_ms
-                text = _preferred_ocr_text(fast_text, accurate_text)
+                if cached is not None:
+                    text = cached
+                    stats.setdefault("ocr_cache_hits", 0)
+                    stats["ocr_cache_hits"] += 1
+                else:
+                    start = time.perf_counter()
+                    text = _ocr_page(
+                        page,
+                        render_scale=ocr_settings.accurate_render_scale,
+                        recognition_level=_ACCURATE_RECOGNITION_LEVEL,
+                    )
+                    stats["ocr_ms"] += _elapsed_ms(start)
+                    _ocr_cache_put(
+                        file_hash, page_num, ocr_settings.accurate_render_scale, _ACCURATE_RECOGNITION_LEVEL, text,
+                    )
+            else:
+                # Default auto: fast pass, then retry with accurate if needed
+                stats["ocr_fast_pages"] += 1
+                fast_start = time.perf_counter()
+                fast_text = _ocr_page(
+                    page,
+                    render_scale=ocr_settings.fast_render_scale,
+                    recognition_level=_FAST_RECOGNITION_LEVEL,
+                )
+                fast_elapsed_ms = _elapsed_ms(fast_start)
+                stats["ocr_fast_ms"] += fast_elapsed_ms
+                stats["ocr_ms"] += fast_elapsed_ms
+                text = fast_text
+                if _non_space_len(fast_text) < ocr_settings.retry_min_chars:
+                    stats["ocr_retries"] += 1
+                    stats["ocr_retry_pages"] += 1
+                    retry_start = time.perf_counter()
+                    accurate_text = _ocr_page(
+                        page,
+                        render_scale=ocr_settings.accurate_render_scale,
+                        recognition_level=_ACCURATE_RECOGNITION_LEVEL,
+                    )
+                    retry_elapsed_ms = _elapsed_ms(retry_start)
+                    stats["ocr_retry_ms"] += retry_elapsed_ms
+                    stats["ocr_ms"] += retry_elapsed_ms
+                    text = _preferred_ocr_text(fast_text, accurate_text)
 
         pages.append({"page_num": page_num, "text": text})
 
