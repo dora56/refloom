@@ -21,21 +21,24 @@ def main():
 
 def run_persistent():
     """Persistent mode: read newline-delimited JSON commands in a loop."""
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError as e:
-            _write_response({"status": "error", "error": f"Invalid JSON input: {e}"})
-            continue
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError as e:
+                _write_response({"status": "error", "error": f"Invalid JSON input: {e}"})
+                continue
 
-        command = request.get("command")
-        if command == "shutdown":
-            break
+            command = request.get("command")
+            if command == "shutdown":
+                break
 
-        _dispatch_command(request)
+            _dispatch_command(request)
+    finally:
+        _cleanup_persistent()
 
 
 def _dispatch_command(request: dict):
@@ -149,6 +152,16 @@ def _apply_epub_repair(pages: list[dict], quality: str) -> tuple[list[dict], str
         return repaired_pages, repaired_quality
 
     return pages, quality
+
+
+def _cleanup_persistent():
+    """Release resources held by the persistent worker."""
+    try:
+        from refloom_worker.pdf_extractor import close_cached_doc
+
+        close_cached_doc()
+    except Exception:  # pragma: no cover
+        pass
 
 
 def _write_jsonl(rows: list[dict], output_path: str):
