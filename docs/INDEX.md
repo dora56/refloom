@@ -13,6 +13,7 @@
 | ドキュメント | 用途 | ステータス |
 |---|---|---|
 | [adr/0000-template.md](adr/0000-template.md) | ADR テンプレート | Active |
+| [adr/0001-staged-extract-jobs.md](adr/0001-staged-extract-jobs.md) | staged extract job への変更記録 | Accepted |
 
 ## What (仕様・評価) — バージョン付き
 
@@ -20,6 +21,7 @@
 |---|---|---|
 | [reports/poc-evaluation.md](reports/poc-evaluation.md) | PoC 評価 (#1-#16) | 2026-03-23 |
 | [reports/poc-final-report.md](reports/poc-final-report.md) | PoC 最終レポート | 2026-03-23 |
+| [reports/staged-extract-design.md](reports/staged-extract-design.md) | staged extract の protocol / workdir 設計 | 2026-03-26 |
 | [reports/codex-comparison-report.md](reports/codex-comparison-report.md) | Codex CLI 比較レポート | 2026-03-23 |
 | [reports/fts-morphology-research.md](reports/fts-morphology-research.md) | FTS 形態素解析リサーチ | 2026-03-23 |
 | [reports/scale-estimation.md](reports/scale-estimation.md) | スケール推定 | 2026-03-23 |
