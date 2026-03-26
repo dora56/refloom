@@ -126,7 +126,23 @@ func runIngest(cmd *cobra.Command, args []string) error {
 
 	workerDir, pythonPath := findWorkerPaths()
 	slog.Debug("python worker", "dir", workerDir, "python", pythonPath)
-	worker := extraction.NewWorker(pythonPath, workerDir)
+
+	poolSize := 1
+	if cfg.ExtractBatchWorkers.Auto {
+		poolSize = 2 // Enough for warm-up + sequential, auto-scaling handles the rest
+	} else if cfg.ExtractBatchWorkers.Fixed > 1 {
+		poolSize = cfg.ExtractBatchWorkers.Fixed
+	}
+
+	var worker extraction.Extractor
+	persistentWorker, err := extraction.NewPersistentWorker(pythonPath, workerDir, poolSize)
+	if err != nil {
+		slog.Warn("persistent worker failed, falling back to spawn-per-call", "error", err)
+		worker = extraction.NewWorker(pythonPath, workerDir)
+	} else {
+		defer persistentWorker.Close()
+		worker = persistentWorker
+	}
 
 	var embedClient *embedding.Client
 	if !ingestSkipEmbedding {
