@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dora56/refloom/internal/db"
@@ -53,13 +54,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 }
 
 func checkDB() CheckResult {
-	if cfg.DBPath == "" {
-		home, _ := os.UserHomeDir()
-		if home == "" {
-			return CheckResult{Name: "Database", Status: "fail", Detail: "cannot determine home directory"}
-		}
-	}
-
 	database, err := db.Open(cfg.DBPath)
 	if err != nil {
 		return CheckResult{Name: "Database", Status: "fail", Detail: fmt.Sprintf("cannot open: %v", err)}
@@ -112,18 +106,24 @@ func checkDisk() CheckResult {
 		return CheckResult{Name: "Disk", Status: "warn", Detail: "cannot determine home directory"}
 	}
 
-	var stat os.FileInfo
 	dbPath := cfg.DBPath
 	if dbPath == "" {
-		dbPath = home + "/.refloom/refloom.db"
+		dbPath = filepath.Join(home, ".refloom", "refloom.db")
 	}
-	stat, err = os.Stat(dbPath)
+	stat, err := os.Stat(dbPath)
 	if err != nil {
 		return CheckResult{Name: "Disk", Status: "ok", Detail: "database file not yet created"}
 	}
 
 	sizeMB := float64(stat.Size()) / 1024 / 1024
-	return CheckResult{Name: "Disk", Status: "ok", Detail: fmt.Sprintf("database size: %.1f MB", sizeMB)}
+
+	// OCR cache size
+	cacheDir := filepath.Join(home, ".refloom", "cache", "ocr")
+	cacheFiles, cacheSizeMB := countDirSize(cacheDir)
+	if cacheFiles > 0 {
+		return CheckResult{Name: "Disk", Status: "ok", Detail: fmt.Sprintf("database: %.1f MB, OCR cache: %.1f MB (%d files)", sizeMB, cacheSizeMB, cacheFiles)}
+	}
+	return CheckResult{Name: "Disk", Status: "ok", Detail: fmt.Sprintf("database: %.1f MB, OCR cache: none", sizeMB)}
 }
 
 func checkAutoExtract() CheckResult {
@@ -141,4 +141,18 @@ func checkAutoExtract() CheckResult {
 
 func autoExtractObservationDegraded(host hostExtractObservation) bool {
 	return host.PerfCores <= 0 || host.TotalMemBytes == 0 || host.FreeMemBytes == 0
+}
+
+func countDirSize(dir string) (files int, sizeMB float64) {
+	var totalBytes int64
+	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		files++
+		totalBytes += info.Size()
+		return nil
+	})
+	sizeMB = float64(totalBytes) / 1024 / 1024
+	return files, sizeMB
 }
