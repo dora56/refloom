@@ -12,8 +12,10 @@ import (
 
 // Claude implements the Provider interface using the Anthropic API.
 type Claude struct {
-	APIKey string
-	Model  string
+	APIKey     string
+	Model      string
+	BaseURL    string       // defaults to https://api.anthropic.com
+	HTTPClient *http.Client // defaults to http.DefaultClient
 }
 
 // NewClaude creates a Claude provider.
@@ -68,7 +70,11 @@ func (c *Claude) Generate(ctx context.Context, system, user string) (string, err
 		return "", fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	baseURL := c.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -76,7 +82,11 @@ func (c *Claude) Generate(ctx context.Context, system, user string) (string, err
 	req.Header.Set("x-api-key", c.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request: %w", err)
 	}

@@ -3,6 +3,8 @@
 from refloom_worker.epub_extractor import (
     _build_chapters_from_toc,
     clean_text,
+    extract_epub_pages,
+    probe_epub,
     repair_pages,
     repair_text,
 )
@@ -92,6 +94,89 @@ class TestRepairText:
         pages = [{"page_num": 1, "text": "A\u200bB\ufffd"}]
         repaired = repair_pages(pages)
         assert repaired == [{"page_num": 1, "text": "AB"}]
+
+
+def _make_test_epub(tmp_path, title="Test Book", author="Author", chapters=None):
+    """Create a minimal EPUB file for testing."""
+    from ebooklib import epub
+
+    book = epub.EpubBook()
+    book.set_identifier("test-id-123")
+    book.set_title(title)
+    book.set_language("ja")
+    book.add_author(author)
+
+    if chapters is None:
+        chapters = [("Chapter 1", "<p>First chapter content</p>")]
+
+    spine_items: list = ["nav"]
+    toc = []
+    for i, (ch_title, html_body) in enumerate(chapters):
+        ch = epub.EpubHtml(
+            title=ch_title,
+            file_name=f"ch{i}.xhtml",
+            lang="ja",
+        )
+        ch.content = f"<html><body><h1>{ch_title}</h1>{html_body}</body></html>".encode()
+        book.add_item(ch)
+        spine_items.append(ch)
+        toc.append(epub.Link(f"ch{i}.xhtml", ch_title, f"ch{i}"))
+
+    book.toc = toc
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = spine_items
+
+    path = str(tmp_path / "test.epub")
+    epub.write_epub(path, book)
+    return path
+
+
+def test_probe_epub_returns_book_metadata(tmp_path):
+    path = _make_test_epub(tmp_path, title="My Book", author="Taro")
+    result = probe_epub(path)
+    assert result["book"]["title"] == "My Book"
+    assert result["book"]["author"] == "Taro"
+    assert result["book"]["format"] == "epub"
+    assert result["book"]["page_count"] >= 1
+    assert result["extraction_mode"] == "text"
+    assert len(result["chapters"]) >= 1
+
+
+def test_probe_epub_multiple_chapters(tmp_path):
+    chapters = [
+        ("第一章", "<p>内容A</p>"),
+        ("第二章", "<p>内容B</p>"),
+    ]
+    path = _make_test_epub(tmp_path, chapters=chapters)
+    result = probe_epub(path)
+    assert len(result["chapters"]) == 2
+    assert result["chapters"][0]["title"] == "第一章"
+    assert result["chapters"][1]["title"] == "第二章"
+
+
+def test_extract_epub_pages_returns_text(tmp_path):
+    chapters = [("Ch1", "<p>Hello world</p>")]
+    path = _make_test_epub(tmp_path, chapters=chapters)
+    result = extract_epub_pages(path, 1, 10)
+    assert len(result["pages"]) >= 1
+    # At least one page should contain "Hello world"
+    texts = [p["text"] for p in result["pages"]]
+    assert any("Hello world" in t for t in texts)
+    assert result["stats"]["ocr_pages"] == 0
+
+
+def test_extract_epub_pages_respects_range(tmp_path):
+    chapters = [
+        ("Ch1", "<p>Page one</p>"),
+        ("Ch2", "<p>Page two</p>"),
+        ("Ch3", "<p>Page three</p>"),
+    ]
+    path = _make_test_epub(tmp_path, chapters=chapters)
+    # Extract only first page
+    result = extract_epub_pages(path, 1, 1)
+    assert len(result["pages"]) == 1
+    assert result["pages"][0]["page_num"] == 1
 
 
 def test_build_chapters_from_toc_spreads_ranges_across_pages():
