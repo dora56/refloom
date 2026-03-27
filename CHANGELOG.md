@@ -1,7 +1,10 @@
 # Changelog
 
 All notable changes to Refloom.
+
 ## [Unreleased]
+
+## [0.2.0] - 2026-03-27
 
 ### Added
 
