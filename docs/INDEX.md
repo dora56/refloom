@@ -4,7 +4,8 @@
 
 | ドキュメント | 用途 | 最終更新 |
 |---|---|---|
-| [../AGENTS.md](../AGENTS.md) | AI エージェント向けプロジェクト指示 | 2026-03-24 |
+| [../CLAUDE.md](../CLAUDE.md) | Claude Code 向けプロジェクト指示 | 2026-03-27 |
+| [../AGENTS.md](../AGENTS.md) | AI エージェント共通プロジェクト指示 | 2026-03-24 |
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | アーキテクチャ概要 (C4 Level 2) | 2026-03-27 |
 | [../README.md](../README.md) | ユーザー向け (インストール・使い方) | 2026-03-24 |
 
