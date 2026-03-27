@@ -29,7 +29,7 @@ class Refloom < Formula
   def post_install
     # Setup Python venv with uv
     cd libexec/"python" do
-      system "uv", "sync", "--group", "prod"
+      system "uv", "sync"
     end
   end
 

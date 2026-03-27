@@ -37,7 +37,7 @@ jobs:
       - name: Setup Python worker
         run: |
           cd python/refloom_worker
-          uv sync --group prod
+          uv sync
           cd ../..
 
       - name: Check version
