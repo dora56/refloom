@@ -7,7 +7,30 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**/*.go'
+              - '**/*.py'
+              - 'go.mod'
+              - 'go.sum'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'Makefile'
+              - '.golangci.yml'
+              - '.github/workflows/**'
+
   go-lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +45,8 @@ jobs:
         run: make fix-check
 
   go-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +57,8 @@ jobs:
         run: make test
 
   python-lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +67,8 @@ jobs:
         run: make lint-python
 
   python-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +77,9 @@ jobs:
         run: make test-python
 
   build:
+    needs: [changes, go-lint, go-test, python-lint, python-test]
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
-    needs: [go-lint, go-test, python-lint, python-test]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -59,3 +89,24 @@ jobs:
         run: make build
       - name: Verify binary
         run: ./bin/refloom version
+
+  ci-status:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [changes, go-lint, go-test, python-lint, python-test, build]
+    steps:
+      - name: Check CI results
+        run: |
+          if [[ "${{ needs.changes.outputs.code }}" != "true" ]]; then
+            echo "Docs-only change, skipping code checks"
+            exit 0
+          fi
+          for result in "${{ needs.go-lint.result }}" "${{ needs.go-test.result }}" \
+                        "${{ needs.python-lint.result }}" "${{ needs.python-test.result }}" \
+                        "${{ needs.build.result }}"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Job failed: $result"
+              exit 1
+            fi
+          done
+          echo "All code checks passed"

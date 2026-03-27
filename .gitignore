@@ -41,3 +41,4 @@ validation-results/
 .vscode/
 _build/
 .claude/.pending-review/
+.claude/settings.local.json
