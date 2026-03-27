@@ -42,3 +42,4 @@ validation-results/
 _build/
 .claude/.pending-review/
 .claude/settings.local.json
+refloom-poc-agent-prompt.md
