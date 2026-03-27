@@ -28,3 +28,7 @@ jobs:
         with:
           files: dist/*.zip
           body_path: RELEASE_NOTES.md
+
+  e2e:
+    needs: release
+    uses: ./.github/workflows/e2e-install.yml

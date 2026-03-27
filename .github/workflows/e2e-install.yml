@@ -1,0 +1,97 @@
+name: E2E Install Test
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 3 * * 1" # Weekly Monday 03:00 UTC
+
+jobs:
+  e2e:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install Ollama
+        run: |
+          brew install ollama
+
+      - name: Start Ollama
+        run: |
+          ollama serve &
+          sleep 5
+
+      - name: Pull embedding model
+        run: ollama pull nomic-embed-text
+
+      - name: Build refloom
+        run: make build
+
+      - name: Setup Python worker
+        run: |
+          cd python/refloom_worker
+          uv sync --group prod
+          cd ../..
+
+      - name: Check version
+        run: ./bin/refloom version
+
+      - name: Run doctor
+        run: ./bin/refloom doctor
+
+      - name: Generate test PDF
+        run: |
+          uv run --with fpdf2 python3 -c "
+          from fpdf import FPDF
+          pdf = FPDF()
+          pdf.add_page()
+          pdf.set_font('Helvetica', size=16)
+          pdf.cell(text='Chapter 1: Introduction')
+          pdf.ln(10)
+          pdf.set_font('Helvetica', size=12)
+          pdf.multi_cell(w=0, text='This is a test document for Refloom E2E validation. '
+            'It contains enough text to generate meaningful chunks for search testing. '
+            'The document covers software architecture patterns and best practices. '
+            'Domain-driven design emphasizes bounded contexts and value objects. '
+            'Clean architecture separates business logic from infrastructure concerns.')
+          pdf.add_page()
+          pdf.set_font('Helvetica', size=16)
+          pdf.cell(text='Chapter 2: Patterns')
+          pdf.ln(10)
+          pdf.set_font('Helvetica', size=12)
+          pdf.multi_cell(w=0, text='Repository pattern abstracts data access behind interfaces. '
+            'Event sourcing stores state changes as an immutable sequence of events. '
+            'CQRS separates read and write models for better scalability. '
+            'Microservices communicate through well-defined API contracts.')
+          pdf.output('/tmp/e2e-test.pdf')
+          print('Test PDF created')
+          "
+
+      - name: Ingest test PDF
+        run: |
+          ./bin/refloom ingest /tmp/e2e-test.pdf --profile-json
+          echo "Ingest completed"
+
+      - name: Search test
+        run: |
+          RESULT=$(./bin/refloom search --json "architecture patterns")
+          echo "$RESULT"
+          COUNT=$(echo "$RESULT" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('results',[])))")
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: search returned 0 results"
+            exit 1
+          fi
+          echo "Search returned $COUNT results"
+
+      - name: Inspect DB
+        run: ./bin/refloom inspect
+
+      - name: Summary
+        run: echo "E2E install test passed"
