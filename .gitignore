@@ -28,7 +28,6 @@ __pycache__/
 /dist/
 
 # Generated
-CHANGELOG.md
 RELEASE_NOTES.md
 
 # Validation artifacts

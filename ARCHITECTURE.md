@@ -16,7 +16,7 @@ PDF/EPUB から抽出したテキストを SQLite に格納し、ハイブリッ
        ▼      │      │      │      ▼
 ┌──────────┐  │      │      │  ┌──────────────┐
 │extraction│  │      │      │  │  config       │
-│ (Go↔Py)  │  │      │      │  │  YAML+env    │
+│(pool/IPC)│  │      │      │  │  YAML+env    │
 └────┬─────┘  │      │      │  └──────────────┘
      │        │      │      │
      ▼        ▼      │      ▼
@@ -39,9 +39,9 @@ PDF/EPUB から抽出したテキストを SQLite に格納し、ハイブリッ
               └─────────────┘     └─────────────┘
 
 ┌─────────────────────────────────────────────────┐
-│            Python Worker (subprocess)            │
-│  pdf_extractor / epub_extractor / chunker        │
-│  quality / ocr_vision                            │
+│       Python Worker (persistent pool / subprocess) │
+│  pdf_extractor / epub_extractor / chunker          │
+│  quality / ocr_vision / OCR cache                  │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -51,8 +51,12 @@ PDF/EPUB から抽出したテキストを SQLite に格納し、ハイブリッ
 cobra ベースのコマンド群。ユーザー入力を受け取り、各パッケージを呼び出す。
 
 ### 抽出 (`internal/extraction/` + `python/refloom_worker/`)
-Go から Python worker を subprocess で起動し、JSON プロトコルで通信。
+Go から Python worker を persistent pool (改行区切り JSON on stdin/stdout) で管理。
+起動時に N 個のワーカーを起動し再利用、クラッシュ時は自動 respawn。
+spawn-per-call にフォールバック可能。(ADR-0007)
 PDF は PyMuPDF + Apple Vision OCR、EPUB は ebooklib + BeautifulSoup で処理。
+OCR-heavy 判定時は accurate-only ポリシーで Vision API 呼び出しを半減。
+ページ単位の OCR キャッシュを `~/.refloom/cache/ocr/` に保存。(ADR-0008)
 抽出品質を ok/ocr_required/extract_failed/text_corrupt に分類。
 
 ### DB (`internal/db/`)
@@ -71,14 +75,15 @@ FTS5 (BM25) + sqlite-vec (cosine) を Reciprocal Rank Fusion (k=60) で統合。
 claude-cli (Claude Code CLI)、anthropic (API 直接)、ollama の 3 プロバイダ。
 
 ### Embedding (`internal/embedding/`)
-Ollama API で nomic-embed-text モデルを使用。
+Ollama API で nomic-embed-text (768次元) を使用。
+2-4 並列ゴルーチンでバッチ送信、DB 保存は逐次 (SQLite 制約)。(ADR-0009)
 
 ## データフロー
 
 ```
-PDF/EPUB → Python Worker → JSON → Go (ingest)
-  → SQLite (books, chapters, chunks)
-  → Ollama embedding → sqlite-vec
+PDF/EPUB → Python Worker (persistent pool) → JSONL → Go (staged extract)
+  → SQLite (books, chapters, chunks) + FTS5 (trigram + kagome)
+  → Ollama embedding (parallel batch) → sqlite-vec
 
 Query → intent detection → FTS5 + sqlite-vec
   → RRF merge → (diversify) → citation prompt → LLM → answer
@@ -93,3 +98,6 @@ Query → intent detection → FTS5 + sqlite-vec
 | FTS5 trigram + kagome | 日本語の部分一致 (trigram) と形態素検索 (kagome) の両立 |
 | RRF (not rerank) | 100冊規模では RRF で十分。rerank はスケール時に検討 |
 | Apple Vision OCR | macOS ネイティブ、追加ライセンス不要、日本語精度良好 |
+| Persistent worker pool | subprocess spawn 14% → 1% に削減 (ADR-0007) |
+| OCR accurate-only + cache | OCR-heavy で Vision 呼び出し半減、再 ingest で OCR スキップ (ADR-0008) |
+| Embedding 並列バッチ | Ollama HTTP I/O 待ち 95% を並列化で 50-75% 削減 (ADR-0009) |
