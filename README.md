@@ -15,30 +15,48 @@
 ## 必要環境
 
 - macOS (Apple Silicon)
-- Go 1.24+ (CGO 有効)
 - Python 3.12+ / [uv](https://docs.astral.sh/uv/)
 - [Ollama](https://ollama.com/) (embedding 生成用)
+
+## インストール
+
+### Homebrew (推奨)
+
+```bash
+brew tap dora56/tap
+brew install refloom
+```
+
+### ソースからビルド
+
+Go 1.24+ (CGO 有効) が必要。
+
+```bash
+git clone https://github.com/dora56/refloom.git
+cd refloom
+make build
+cd python/refloom_worker && uv sync --group dev && cd ../..
+```
+
+### GitHub Releases
+
+[Releases](https://github.com/dora56/refloom/releases) から darwin-arm64 zip をダウンロードして展開。
 
 ## クイックスタート
 
 ```bash
 # 1. Ollama の準備
+brew install ollama
 ollama pull nomic-embed-text
 
-# 2. ビルド
-make build
+# 2. 書籍の取り込み
+refloom ingest ~/Books/example.pdf
 
-# 3. Python 依存のインストール
-cd python/refloom_worker && uv sync --group dev && cd ../..
+# 3. 検索
+refloom search "キーワード"
 
-# 4. 書籍の取り込み
-./bin/refloom ingest ~/Books/example.pdf
-
-# 5. 検索
-./bin/refloom search "キーワード"
-
-# 6. 質問応答
-./bin/refloom ask "この本の主要な論点は何ですか？"
+# 4. 質問応答
+refloom ask "この本の主要な論点は何ですか？"
 ```
 
 ## コマンド一覧

@@ -23,11 +23,21 @@ jobs:
         run: git-cliff --latest --strip header -o RELEASE_NOTES.md
       - name: Build distribution
         run: make dist
+      - name: Compute SHA256
+        id: sha
+        run: |
+          SHA=$(shasum -a 256 dist/*.zip | cut -d' ' -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
           body_path: RELEASE_NOTES.md
+          append_body: true
+      - name: Print Homebrew formula update info
+        run: |
+          echo "::notice::Update homebrew-tap Formula/refloom.rb with sha256 '${{ steps.sha.outputs.sha256 }}'"
 
   e2e:
     needs: release

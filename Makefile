@@ -74,7 +74,8 @@ dist: build
 	mkdir -p $(DIST_DIR)/refloom/python/refloom_worker
 	cp $(BUILD_DIR)/$(BINARY) $(DIST_DIR)/refloom/
 	cp -r python/refloom_worker/*.py $(DIST_DIR)/refloom/python/refloom_worker/
-	cp python/refloom_worker/requirements.txt $(DIST_DIR)/refloom/python/refloom_worker/
+	cp python/refloom_worker/pyproject.toml $(DIST_DIR)/refloom/python/refloom_worker/
 	cp config/refloom.example.yaml $(DIST_DIR)/refloom/
 	cd $(DIST_DIR) && zip -r refloom-$(VERSION)-darwin-arm64.zip refloom/
 	@echo "Distribution created: $(DIST_DIR)/refloom-$(VERSION)-darwin-arm64.zip"
+	@echo "SHA256: $$(shasum -a 256 $(DIST_DIR)/refloom-$(VERSION)-darwin-arm64.zip | cut -d' ' -f1)"
