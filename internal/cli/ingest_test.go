@@ -12,6 +12,7 @@ import (
 
 	"github.com/dora56/refloom/internal/db"
 	"github.com/dora56/refloom/internal/embedding"
+	"github.com/dora56/refloom/internal/extraction"
 )
 
 func TestShouldLogEmbeddingProgress(t *testing.T) {
@@ -296,6 +297,104 @@ func openTestDB(t *testing.T) *db.DB {
 	}
 	t.Cleanup(func() { database.Close() }) //nolint:errcheck,gosec
 	return database
+}
+
+func TestApplyExtractResultToProfile(t *testing.T) {
+	t.Parallel()
+
+	resp := &stagedExtractResult{
+		ProbeMS:                 10,
+		PageExtractMS:           200,
+		PageExtractSumMS:        180,
+		ChunkMS:                 30,
+		BatchCount:              3,
+		FailedBatchCount:        1,
+		ExtractWorkersMode:      "auto",
+		ExtractWorkersRequested: "auto",
+		ExtractWorkersUsed:      4,
+		ExtractAutoMaxWorkers:   8,
+		ExtractAutoEffectiveCap: 4,
+		ExtractAutoTier:         "pro",
+		ExtractAutoCandidates:   []int{1, 2, 4},
+		AutoWorkerReason:        "warm-up",
+		Resumed:                 true,
+		JobDir:                  "/tmp/test-job",
+		Quality:                 "ok",
+		Chapters:                []extraction.ChapterInfo{{Title: "ch1"}, {Title: "ch2"}},
+		Chunks:                  []extraction.ChunkInfo{{Body: "a"}, {Body: "b"}, {Body: "c"}},
+		Stats: extraction.Stats{
+			OCRPages:      10,
+			OCRRetries:    2,
+			OCRMS:         5000,
+			OCRFastPages:  8,
+			OCRRetryPages: 2,
+		},
+	}
+
+	profile := &ingestProfile{}
+	applyExtractResultToProfile(profile, resp)
+
+	if profile.ExtractMS != 240 {
+		t.Fatalf("ExtractMS = %d, want 240", profile.ExtractMS)
+	}
+	if profile.Chapters != 2 {
+		t.Fatalf("Chapters = %d, want 2", profile.Chapters)
+	}
+	if profile.Chunks != 0 {
+		t.Fatalf("Chunks = %d, want 0 (set later by persistBookData)", profile.Chunks)
+	}
+	if profile.Quality != "ok" {
+		t.Fatalf("Quality = %q, want ok", profile.Quality)
+	}
+	if !profile.ParallelExtractEnabled {
+		t.Fatal("ParallelExtractEnabled = false, want true")
+	}
+	if profile.OCRFastPages != 8 {
+		t.Fatalf("OCRFastPages = %d, want 8", profile.OCRFastPages)
+	}
+}
+
+func TestApplyExtractResultToProfileDefaultQuality(t *testing.T) {
+	t.Parallel()
+
+	resp := &stagedExtractResult{Quality: ""}
+	profile := &ingestProfile{}
+	applyExtractResultToProfile(profile, resp)
+
+	if profile.Quality != "ok" {
+		t.Fatalf("Quality = %q, want ok", profile.Quality)
+	}
+}
+
+func TestHandleExtractionQuality(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+
+	tests := []struct {
+		name    string
+		quality string
+		skip    bool
+	}{
+		{name: "ok passes", quality: "ok", skip: false},
+		{name: "ocr_required skips", quality: "ocr_required", skip: true},
+		{name: "extract_failed skips", quality: "extract_failed", skip: true},
+		{name: "text_corrupt proceeds", quality: "text_corrupt", skip: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			skip, err := handleExtractionQuality(tc.quality, "/tmp/test.pdf", database)
+			if err != nil {
+				t.Fatalf("handleExtractionQuality: %v", err)
+			}
+			if skip != tc.skip {
+				t.Fatalf("skip = %v, want %v", skip, tc.skip)
+			}
+		})
+	}
 }
 
 // setupCfgForTest is defined in extract_job_test.go

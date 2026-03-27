@@ -66,7 +66,7 @@ func (c *Client) embedWithRetry(ctx context.Context, input any) ([][]float32, er
 		}
 		lastErr = err
 		if attempt < c.MaxRetries-1 {
-			delay := delays[attempt]
+			delay := delays[min(attempt, len(delays)-1)]
 			slog.Warn("embedding retry", "attempt", attempt+1, "delay", delay, "error", err)
 			select {
 			case <-ctx.Done():

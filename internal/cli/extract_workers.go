@@ -13,7 +13,7 @@ import (
 const (
 	autoExtractMinTotalMemBytes = 8 << 30
 	autoExtractMinFreeMemBytes  = 1 << 30
-	autoExtractCritFreeMemBytes = 512 << 20
+	autoExtractCritFreeMemBytes = 256 << 20
 	autoWarmupBatchCount        = 2
 )
 
@@ -190,7 +190,7 @@ func autoExtractHostCap(tier autoExtractTier, configuredCap int, host hostExtrac
 	}
 	if host.FreeMemBytes > 0 && host.FreeMemBytes < autoExtractCritFreeMemBytes {
 		effectiveCap = 1
-		memoryAdjustments = append(memoryAdjustments, "free_mem_lt_512mib")
+		memoryAdjustments = append(memoryAdjustments, "free_mem_lt_256mib")
 	}
 	return max(1, effectiveCap), memoryAdjustments
 }

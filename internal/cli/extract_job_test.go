@@ -459,7 +459,7 @@ func TestResolveExtractWorkerPlanAutoCriticalFreeMemoryForcesOne(t *testing.T) {
 			PerfCores:     8,
 			PhysicalCores: 10,
 			TotalMemBytes: 16 << 30,
-			FreeMemBytes:  256 << 20,
+			FreeMemBytes:  128 << 20,
 		},
 		30000,
 	)
@@ -467,7 +467,7 @@ func TestResolveExtractWorkerPlanAutoCriticalFreeMemoryForcesOne(t *testing.T) {
 	if plan.Used != 1 {
 		t.Fatalf("Used = %d, want 1", plan.Used)
 	}
-	if !strings.Contains(plan.Reason, "selected=1") || !strings.Contains(plan.Reason, "memory_adjusted=free_mem_lt_512mib") {
+	if !strings.Contains(plan.Reason, "selected=1") || !strings.Contains(plan.Reason, "memory_adjusted=free_mem_lt_256mib") {
 		t.Fatalf("Reason = %q, want critical free memory reason", plan.Reason)
 	}
 }

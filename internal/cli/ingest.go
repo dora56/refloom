@@ -246,6 +246,256 @@ func ingestFile(ctx context.Context, database *db.DB, worker extraction.Extracto
 	if err != nil {
 		return profile, fmt.Errorf("extract: %w", err)
 	}
+	applyExtractResultToProfile(profile, resp)
+	log.Info("extracted",
+		"chapters", profile.Chapters,
+		"chunks", len(resp.Chunks),
+		"quality", profile.Quality,
+		"probe_duration", time.Duration(profile.ProbeMS)*time.Millisecond,
+		"page_extract_duration", time.Duration(profile.PageExtractMS)*time.Millisecond,
+		"chunk_duration", time.Duration(profile.ChunkMS)*time.Millisecond,
+		"duration", time.Duration(profile.ExtractMS)*time.Millisecond,
+		"batches", profile.BatchCount,
+		"extract_workers_mode", profile.ExtractWorkersMode,
+		"extract_workers_requested", profile.ExtractWorkersRequested,
+		"extract_workers_used", profile.ExtractWorkersUsed,
+		"extract_auto_max_workers", profile.ExtractAutoMaxWorkers,
+		"extract_auto_effective_cap", profile.ExtractAutoEffectiveCap,
+		"extract_auto_tier", profile.ExtractAutoTier,
+		"extract_auto_candidates", profile.ExtractAutoCandidates,
+		"auto_worker_reason", profile.AutoWorkerReason,
+		"job_dir", profile.JobDir,
+	)
+
+	if skip, qErr := handleExtractionQuality(profile.Quality, absPath, database); qErr != nil {
+		return profile, qErr
+	} else if skip {
+		profile.Status = "skipped"
+		return profile, nil
+	}
+
+	tagsJSONBytes, _ := json.Marshal(ingestTags)
+	tagsJSON := string(tagsJSONBytes)
+	if tagsJSON == "null" {
+		tagsJSON = "[]"
+	}
+
+	dbStart := time.Now()
+	bookID, insertedChunks, ftsMS, err := persistBookData(database, resp, absPath, format, hash, tagsJSON, log)
+	if err != nil {
+		return profile, err
+	}
+	profile.DBMS = time.Since(dbStart).Milliseconds()
+	profile.FTSMS = ftsMS
+	profile.Chunks = len(insertedChunks)
+	_ = database.LogIngest(bookID, "chunked", fmt.Sprintf("%d chapters, %d chunks", len(resp.Chapters), len(insertedChunks)))
+
+	if err := runEmbeddingPhase(ctx, database, embedClient, bookID, insertedChunks, profile, log); err != nil {
+		return profile, err
+	}
+
+	// Clean up work directory after successful ingest
+	if profile.JobDir != "" && !ingestKeepWork {
+		if removeErr := os.RemoveAll(profile.JobDir); removeErr != nil {
+			slog.Warn("failed to clean up work directory", "dir", profile.JobDir, "error", removeErr)
+		}
+	}
+
+	log.Info("done",
+		"title", resp.Book.Title,
+		"chapters", len(resp.Chapters),
+		"chunks", len(insertedChunks),
+		"embed_skipped", profile.EmbedSkipped,
+		"embed_ms", profile.EmbedMS,
+		"embed_batches", profile.EmbedBatches,
+	)
+	return profile, nil
+}
+
+// persistBookData inserts book, chapters, chunks, links, and FTS data within a transaction.
+func persistBookData(
+	database *db.DB,
+	resp *stagedExtractResult,
+	absPath, format, hash, tagsJSON string,
+	log *slog.Logger,
+) (bookID int64, chunks []insertedChunk, ftsMS int64, err error) {
+	tx, err := database.Begin()
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	bookRes, err := tx.Exec(
+		`INSERT INTO book (title, author, format, source_path, file_hash, tags) VALUES (?, ?, ?, ?, ?, ?)`,
+		resp.Book.Title, resp.Book.Author, format, absPath, hash, tagsJSON,
+	)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("insert book: %w", err)
+	}
+	bookID, _ = bookRes.LastInsertId()
+
+	chapterIDMap := make(map[int]int64)
+	chapterStmt, err := tx.Prepare(
+		`INSERT INTO chapter (book_id, title, chapter_order, page_start, page_end) VALUES (?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("prepare chapter insert: %w", err)
+	}
+	defer chapterStmt.Close() //nolint:errcheck
+
+	for _, ch := range resp.Chapters {
+		var pageStart, pageEnd sql.NullInt64
+		if ch.PageStart != nil {
+			pageStart = sql.NullInt64{Int64: int64(*ch.PageStart), Valid: true}
+		}
+		if ch.PageEnd != nil {
+			pageEnd = sql.NullInt64{Int64: int64(*ch.PageEnd), Valid: true}
+		}
+		res, err := chapterStmt.Exec(
+			bookID, ch.Title, ch.Order, pageStart, pageEnd,
+		)
+		if err != nil {
+			return 0, nil, 0, fmt.Errorf("insert chapter %d: %w", ch.Order, err)
+		}
+		chID, _ := res.LastInsertId()
+		chapterIDMap[ch.Order] = chID
+	}
+
+	chunkStmt, err := tx.Prepare(
+		`INSERT INTO chunk (book_id, chapter_id, heading, body, char_count, page_start, page_end, chunk_order, embedding_version)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("prepare chunk insert: %w", err)
+	}
+	defer chunkStmt.Close() //nolint:errcheck
+
+	chunks = make([]insertedChunk, 0, len(resp.Chunks))
+	for _, ck := range resp.Chunks {
+		chapterID, ok := chapterIDMap[ck.ChapterOrder]
+		if !ok {
+			log.Warn("chunk references unknown chapter", "chapter_order", ck.ChapterOrder)
+			continue
+		}
+		var pageStart, pageEnd sql.NullInt64
+		if ck.PageStart != nil {
+			pageStart = sql.NullInt64{Int64: int64(*ck.PageStart), Valid: true}
+		}
+		if ck.PageEnd != nil {
+			pageEnd = sql.NullInt64{Int64: int64(*ck.PageEnd), Valid: true}
+		}
+		res, err := chunkStmt.Exec(
+			bookID, chapterID, ck.Heading, ck.Body, ck.CharCount, pageStart, pageEnd, ck.ChunkOrder, "",
+		)
+		if err != nil {
+			return 0, nil, 0, fmt.Errorf("insert chunk: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		chunks = append(chunks, insertedChunk{
+			embeddedChunk: embeddedChunk{
+				ChunkID: id,
+				Heading: ck.Heading,
+				Body:    ck.Body,
+			},
+			ChapterID: chapterID,
+		})
+	}
+
+	// Link prev/next within each chapter
+	linkNextStmt, err := tx.Prepare(`UPDATE chunk SET next_chunk_id = ? WHERE chunk_id = ?`)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("prepare link next: %w", err)
+	}
+	defer linkNextStmt.Close() //nolint:errcheck
+
+	linkPrevStmt, err := tx.Prepare(`UPDATE chunk SET prev_chunk_id = ? WHERE chunk_id = ?`)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("prepare link prev: %w", err)
+	}
+	defer linkPrevStmt.Close() //nolint:errcheck
+
+	prevByChapter := make(map[int64]int64)
+	for _, chunk := range chunks {
+		chapterID := chunk.ChapterID
+		chunkID := chunk.ChunkID
+		if prevID, exists := prevByChapter[chapterID]; exists {
+			if _, err := linkNextStmt.Exec(chunkID, prevID); err != nil {
+				return 0, nil, 0, fmt.Errorf("link next: %w", err)
+			}
+			if _, err := linkPrevStmt.Exec(prevID, chunkID); err != nil {
+				return 0, nil, 0, fmt.Errorf("link prev: %w", err)
+			}
+		}
+		prevByChapter[chapterID] = chunkID
+	}
+
+	// FTS indexing
+	ftsStart := time.Now()
+	ftsStmt, err := tx.Prepare(`INSERT INTO chunk_fts_seg(rowid, heading, body) VALUES (?, ?, ?)`)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("prepare segmented FTS insert: %w", err)
+	}
+	defer ftsStmt.Close() //nolint:errcheck
+
+	for _, chunk := range chunks {
+		if err := insertSegmentedFTSTx(ftsStmt, chunk.ChunkID, chunk.Heading, chunk.Body); err != nil {
+			return 0, nil, 0, fmt.Errorf("insert segmented FTS: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, nil, 0, fmt.Errorf("commit: %w", err)
+	}
+	ftsMS = time.Since(ftsStart).Milliseconds()
+	return bookID, chunks, ftsMS, nil
+}
+
+// runEmbeddingPhase generates embeddings or marks them as skipped.
+func runEmbeddingPhase(
+	ctx context.Context,
+	database *db.DB,
+	embedClient *embedding.Client,
+	bookID int64,
+	insertedChunks []insertedChunk,
+	profile *ingestProfile,
+	log *slog.Logger,
+) error {
+	if ingestSkipEmbedding {
+		applyEmbeddingSkippedProfile(profile)
+		_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, embedding skipped", len(insertedChunks)))
+		return nil
+	}
+
+	log.Info("generating embeddings", "chunks", len(insertedChunks))
+	embedStart := time.Now()
+	batchSize := resolvedEmbeddingBatchSize(cfg.EmbeddingBatchSize)
+	profile.EmbedBatchSize = batchSize
+
+	embedInputs := make([]embeddedChunk, 0, len(insertedChunks))
+	for _, chunk := range insertedChunks {
+		embedInputs = append(embedInputs, chunk.embeddedChunk)
+	}
+
+	embedStats, err := saveChunkEmbeddings(ctx, database, embedClient, cfg.OllamaEmbedModel, batchSize, embedInputs, false, log)
+	if err != nil {
+		return err
+	}
+	profile.EmbedMS = time.Since(embedStart).Milliseconds()
+	profile.EmbedBatches = embedStats.Batches
+
+	if embedStats.Fails > 0 {
+		_ = database.LogIngest(bookID, "embedded", fmt.Sprintf("%d/%d succeeded", len(insertedChunks)-embedStats.Fails, len(insertedChunks)))
+		if shouldWarnEmbeddingFailures(embedStats.Fails, len(embedInputs)) {
+			slog.Warn("embedding failure rate exceeds 50%; book is FTS-searchable but vector search will be degraded",
+				"fails", embedStats.Fails, "total", len(embedInputs),
+				"ratio", fmt.Sprintf("%.0f%%", float64(embedStats.Fails)/float64(len(embedInputs))*100))
+		}
+	}
+	_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, %d embed failures", len(insertedChunks), embedStats.Fails))
+	return nil
+}
+
+func applyExtractResultToProfile(profile *ingestProfile, resp *stagedExtractResult) {
 	profile.ProbeMS = resp.ProbeMS
 	profile.PageExtractMS = resp.PageExtractMS
 	profile.PageExtractSumMS = resp.PageExtractSumMS
@@ -264,13 +514,15 @@ func ingestFile(ctx context.Context, database *db.DB, worker extraction.Extracto
 	profile.AutoWorkerReason = resp.AutoWorkerReason
 	profile.Resumed = resp.Resumed
 	profile.JobDir = resp.JobDir
+
 	quality := resp.Quality
 	if quality == "" {
 		quality = "ok"
 	}
 	profile.Quality = quality
 	profile.Chapters = len(resp.Chapters)
-	profile.Chunks = len(resp.Chunks)
+	// profile.Chunks is set after persistBookData to reflect actual inserted count
+
 	profile.OCRPages = resp.Stats.OCRPages
 	profile.OCRRetries = resp.Stats.OCRRetries
 	profile.OCRMS = resp.Stats.OCRMS
@@ -285,238 +537,24 @@ func ingestFile(ctx context.Context, database *db.DB, worker extraction.Extracto
 	if profile.OCRRetries == 0 {
 		profile.OCRRetries = profile.OCRRetryPages
 	}
-	log.Info("extracted",
-		"chapters", len(resp.Chapters),
-		"chunks", len(resp.Chunks),
-		"quality", quality,
-		"probe_duration", time.Duration(profile.ProbeMS)*time.Millisecond,
-		"page_extract_duration", time.Duration(profile.PageExtractMS)*time.Millisecond,
-		"chunk_duration", time.Duration(profile.ChunkMS)*time.Millisecond,
-		"duration", time.Duration(profile.ExtractMS)*time.Millisecond,
-		"batches", profile.BatchCount,
-		"extract_workers_mode", profile.ExtractWorkersMode,
-		"extract_workers_requested", profile.ExtractWorkersRequested,
-		"extract_workers_used", profile.ExtractWorkersUsed,
-		"extract_auto_max_workers", profile.ExtractAutoMaxWorkers,
-		"extract_auto_effective_cap", profile.ExtractAutoEffectiveCap,
-		"extract_auto_tier", profile.ExtractAutoTier,
-		"extract_auto_candidates", profile.ExtractAutoCandidates,
-		"auto_worker_reason", profile.AutoWorkerReason,
-		"job_dir", profile.JobDir,
-	)
+}
 
+// handleExtractionQuality checks extraction quality and returns (skip, error).
+// skip=true means the file should be skipped (not an error).
+func handleExtractionQuality(quality, absPath string, database *db.DB) (skip bool, err error) {
 	switch quality {
 	case "ocr_required":
 		fmt.Fprintf(os.Stderr, "  quality: %s — skipping (no extractable text)\n", quality)
 		_ = database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
-		profile.Status = "skipped"
-		return profile, nil
+		return true, nil
 	case "extract_failed":
 		fmt.Fprintf(os.Stderr, "  quality: %s — skipping\n", quality)
 		_ = database.LogIngest(0, "failed", fmt.Sprintf("quality=%s: %s", quality, absPath))
-		profile.Status = "skipped"
-		return profile, nil
+		return true, nil
 	case "text_corrupt":
 		fmt.Fprintf(os.Stderr, "  quality: %s — proceeding with warning (text may contain mojibake)\n", quality)
 	}
-
-	tx, err := database.Begin()
-	if err != nil {
-		return profile, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	tagsJSON := "[]"
-	if len(ingestTags) > 0 {
-		tagsJSON = `["` + strings.Join(ingestTags, `","`) + `"]`
-	}
-	dbStart := time.Now()
-	bookRes, err := tx.Exec(
-		`INSERT INTO book (title, author, format, source_path, file_hash, tags) VALUES (?, ?, ?, ?, ?, ?)`,
-		resp.Book.Title, resp.Book.Author, format, absPath, hash, tagsJSON,
-	)
-	if err != nil {
-		return profile, fmt.Errorf("insert book: %w", err)
-	}
-	bookID, _ := bookRes.LastInsertId()
-
-	chapterIDMap := make(map[int]int64)
-	chapterStmt, err := tx.Prepare(
-		`INSERT INTO chapter (book_id, title, chapter_order, page_start, page_end) VALUES (?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return profile, fmt.Errorf("prepare chapter insert: %w", err)
-	}
-	defer chapterStmt.Close() //nolint:errcheck
-
-	for _, ch := range resp.Chapters {
-		var pageStart, pageEnd sql.NullInt64
-		if ch.PageStart != nil {
-			pageStart = sql.NullInt64{Int64: int64(*ch.PageStart), Valid: true}
-		}
-		if ch.PageEnd != nil {
-			pageEnd = sql.NullInt64{Int64: int64(*ch.PageEnd), Valid: true}
-		}
-		res, err := chapterStmt.Exec(
-			bookID, ch.Title, ch.Order, pageStart, pageEnd,
-		)
-		if err != nil {
-			return profile, fmt.Errorf("insert chapter %d: %w", ch.Order, err)
-		}
-		chID, _ := res.LastInsertId()
-		chapterIDMap[ch.Order] = chID
-	}
-
-	chunkStmt, err := tx.Prepare(
-		`INSERT INTO chunk (book_id, chapter_id, heading, body, char_count, page_start, page_end, chunk_order, embedding_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		return profile, fmt.Errorf("prepare chunk insert: %w", err)
-	}
-	defer chunkStmt.Close() //nolint:errcheck
-
-	insertedChunks := make([]insertedChunk, 0, len(resp.Chunks))
-	for _, ck := range resp.Chunks {
-		chapterID, ok := chapterIDMap[ck.ChapterOrder]
-		if !ok {
-			log.Warn("chunk references unknown chapter", "chapter_order", ck.ChapterOrder)
-			continue
-		}
-		var pageStart, pageEnd sql.NullInt64
-		if ck.PageStart != nil {
-			pageStart = sql.NullInt64{Int64: int64(*ck.PageStart), Valid: true}
-		}
-		if ck.PageEnd != nil {
-			pageEnd = sql.NullInt64{Int64: int64(*ck.PageEnd), Valid: true}
-		}
-		res, err := chunkStmt.Exec(
-			bookID, chapterID, ck.Heading, ck.Body, ck.CharCount, pageStart, pageEnd, ck.ChunkOrder, "",
-		)
-		if err != nil {
-			return profile, fmt.Errorf("insert chunk: %w", err)
-		}
-		id, _ := res.LastInsertId()
-		insertedChunks = append(insertedChunks, insertedChunk{
-			embeddedChunk: embeddedChunk{
-				ChunkID: id,
-				Heading: ck.Heading,
-				Body:    ck.Body,
-			},
-			ChapterID: chapterID,
-		})
-	}
-	profile.Chunks = len(insertedChunks)
-
-	// Link prev/next within each chapter
-	linkNextStmt, err := tx.Prepare(`UPDATE chunk SET next_chunk_id = ? WHERE chunk_id = ?`)
-	if err != nil {
-		return profile, fmt.Errorf("prepare link next: %w", err)
-	}
-	defer linkNextStmt.Close() //nolint:errcheck
-
-	linkPrevStmt, err := tx.Prepare(`UPDATE chunk SET prev_chunk_id = ? WHERE chunk_id = ?`)
-	if err != nil {
-		return profile, fmt.Errorf("prepare link prev: %w", err)
-	}
-	defer linkPrevStmt.Close() //nolint:errcheck
-
-	prevByChapter := make(map[int64]int64) // chapterID -> last chunk ID
-	for _, chunk := range insertedChunks {
-		chapterID := chunk.ChapterID
-		chunkID := chunk.ChunkID
-		if prevID, exists := prevByChapter[chapterID]; exists {
-			if _, err := linkNextStmt.Exec(chunkID, prevID); err != nil {
-				return profile, fmt.Errorf("link next: %w", err)
-			}
-			if _, err := linkPrevStmt.Exec(prevID, chunkID); err != nil {
-				return profile, fmt.Errorf("link prev: %w", err)
-			}
-		}
-		prevByChapter[chapterID] = chunkID
-	}
-	profile.DBMS = time.Since(dbStart).Milliseconds()
-
-	ftsStart := time.Now()
-	ftsStmt, err := tx.Prepare(`INSERT INTO chunk_fts_seg(rowid, heading, body) VALUES (?, ?, ?)`)
-	if err != nil {
-		return profile, fmt.Errorf("prepare segmented FTS insert: %w", err)
-	}
-	defer ftsStmt.Close() //nolint:errcheck
-
-	for _, chunk := range insertedChunks {
-		if err := insertSegmentedFTSTx(ftsStmt, chunk.ChunkID, chunk.Heading, chunk.Body); err != nil {
-			return profile, fmt.Errorf("insert segmented FTS: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return profile, fmt.Errorf("commit: %w", err)
-	}
-	profile.FTSMS = time.Since(ftsStart).Milliseconds()
-	_ = database.LogIngest(bookID, "chunked", fmt.Sprintf("%d chapters, %d chunks", len(resp.Chapters), len(insertedChunks)))
-
-	if ingestSkipEmbedding {
-		applyEmbeddingSkippedProfile(profile)
-		_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, embedding skipped", len(insertedChunks)))
-		if profile.JobDir != "" && !ingestKeepWork {
-			if removeErr := os.RemoveAll(profile.JobDir); removeErr != nil {
-				slog.Warn("failed to clean up work directory", "dir", profile.JobDir, "error", removeErr)
-			}
-		}
-		log.Info("done",
-			"title", resp.Book.Title,
-			"chapters", len(resp.Chapters),
-			"chunks", len(insertedChunks),
-			"embedding_skipped", true,
-		)
-		return profile, nil
-	}
-
-	log.Info("generating embeddings", "chunks", len(insertedChunks))
-	embedStart := time.Now()
-	batchSize := resolvedEmbeddingBatchSize(cfg.EmbeddingBatchSize)
-	profile.EmbedBatchSize = batchSize
-	embedInputs := make([]embeddedChunk, 0, len(insertedChunks))
-	for _, chunk := range insertedChunks {
-		embedInputs = append(embedInputs, chunk.embeddedChunk)
-	}
-	embedStats, err := saveChunkEmbeddings(ctx, database, embedClient, cfg.OllamaEmbedModel, batchSize, embedInputs, false, log)
-	if err != nil {
-		return profile, err
-	}
-	profile.EmbedMS = time.Since(embedStart).Milliseconds()
-	profile.EmbedBatches = embedStats.Batches
-
-	if embedStats.Fails > 0 {
-		_ = database.LogIngest(bookID, "embedded", fmt.Sprintf("%d/%d succeeded", len(insertedChunks)-embedStats.Fails, len(insertedChunks)))
-		if shouldWarnEmbeddingFailures(embedStats.Fails, len(embedInputs)) {
-			slog.Warn("embedding failure rate exceeds 50%; book is FTS-searchable but vector search will be degraded",
-				"fails", embedStats.Fails, "total", len(embedInputs),
-				"ratio", fmt.Sprintf("%.0f%%", float64(embedStats.Fails)/float64(len(embedInputs))*100))
-		}
-	}
-	_ = database.LogIngest(bookID, "completed", fmt.Sprintf("%d chunks, %d embed failures", len(insertedChunks), embedStats.Fails))
-
-	// Clean up work directory after successful ingest
-	if profile.JobDir != "" && !ingestKeepWork {
-		if removeErr := os.RemoveAll(profile.JobDir); removeErr != nil {
-			slog.Warn("failed to clean up work directory", "dir", profile.JobDir, "error", removeErr)
-		}
-	}
-
-	log.Info("done",
-		"title", resp.Book.Title,
-		"chapters", len(resp.Chapters),
-		"chunks", len(insertedChunks),
-		"embed_fails", embedStats.Fails,
-		"embed_batch_size", batchSize,
-		"embed_batches", embedStats.Batches,
-		"embed_request_ms", embedStats.RequestMS,
-		"embed_save_ms", embedStats.SaveMS,
-		"embed_duration", time.Duration(profile.EmbedMS)*time.Millisecond,
-	)
-	return profile, nil
+	return false, nil
 }
 
 func emitIngestProfile(profile *ingestProfile) error {

@@ -9,8 +9,6 @@ import (
 )
 
 func TestEmbedSendsSingleInput(t *testing.T) {
-	t.Helper()
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/embed" {
 			t.Fatalf("path = %s, want /api/embed", r.URL.Path)
@@ -48,8 +46,6 @@ func TestEmbedSendsSingleInput(t *testing.T) {
 }
 
 func TestEmbedBatchSendsArrayInput(t *testing.T) {
-	t.Helper()
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Model string   `json:"model"`
@@ -85,6 +81,39 @@ func TestEmbedBatchSendsArrayInput(t *testing.T) {
 	}
 	if got[0][0] != 1 || got[1][1] != 4 {
 		t.Fatalf("embeddings = %v, want [[1 2] [3 4]]", got)
+	}
+}
+
+func TestEmbedWithRetryMaxRetriesExceedsDelays(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		if callCount < 5 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": [][]float64{{1, 2, 3}},
+		})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		BaseURL:    server.URL,
+		Model:      "test",
+		MaxRetries: 5, // exceeds len(delays)=3, must not panic
+		HTTPClient: server.Client(),
+	}
+
+	got, err := client.Embed(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("embedding len = %d, want 3", len(got))
+	}
+	if callCount != 5 {
+		t.Fatalf("callCount = %d, want 5", callCount)
 	}
 }
 
