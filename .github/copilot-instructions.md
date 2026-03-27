@@ -10,7 +10,7 @@ Before writing code, read:
 
 ## Project Skills
 
-- **branch-strategy**: Refloom のブランチ戦略・PR ワークフロー・リリースフローの定義
+- **branch-strategy**: Refloom のブランチ戦略・PR ワークフロー・リリースフロー・バージョニング・オートマージの定義
 
 ## Hard Rules
 

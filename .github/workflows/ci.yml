@@ -26,7 +26,6 @@ jobs:
               - 'uv.lock'
               - 'Makefile'
               - '.golangci.yml'
-              - '.github/workflows/**'
 
   go-lint:
     needs: changes
@@ -98,7 +97,7 @@ jobs:
       - name: Check CI results
         run: |
           if [[ "${{ needs.changes.outputs.code }}" != "true" ]]; then
-            echo "Docs-only change, skipping code checks"
+            echo "No code changes (docs/CI config only), skipping code checks"
             exit 0
           fi
           for result in "${{ needs.go-lint.result }}" "${{ needs.go-test.result }}" \
