@@ -79,3 +79,6 @@ dist: build
 	cd $(DIST_DIR) && zip -r refloom-$(VERSION)-darwin-arm64.zip refloom/
 	@echo "Distribution created: $(DIST_DIR)/refloom-$(VERSION)-darwin-arm64.zip"
 	@echo "SHA256: $$(shasum -a 256 $(DIST_DIR)/refloom-$(VERSION)-darwin-arm64.zip | cut -d' ' -f1)"
+
+setup-skills:
+	bash scripts/setup-agent-skills.sh
