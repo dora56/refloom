@@ -62,7 +62,7 @@ func (e *Engine) searchFTS(query string, limit int, bookID *int64) ([]Result, er
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
-	return e.enrichResults(dbResults, false)
+	return e.enrichResults(dbResults)
 }
 
 func (e *Engine) searchVector(ctx context.Context, query string, limit int, bookID *int64) ([]Result, error) {
@@ -74,7 +74,7 @@ func (e *Engine) searchVector(ctx context.Context, query string, limit int, book
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
-	return e.enrichResults(dbResults, false)
+	return e.enrichResults(dbResults)
 }
 
 // SearchHybridWithHyDE performs hybrid search augmented with a HyDE hypothesis.
@@ -90,21 +90,30 @@ func (e *Engine) SearchHybridWithHyDE(ctx context.Context, query, hypothesis str
 	}
 
 	// Vector search with original query
+	var vecErr error
 	queryEmb, embErr := e.EmbedClient.Embed(ctx, query)
 	var vecResults []db.SearchResult
 	if embErr == nil {
-		vecResults, _ = e.DB.SearchVector(queryEmb, fetchK, bookID)
+		vecResults, vecErr = e.DB.SearchVector(queryEmb, fetchK, bookID)
+		if vecErr != nil {
+			vecResults = nil
+		}
 	}
 
 	// Vector search with hypothesis
+	var hydeVecErr error
 	hydeEmb, hydeErr := e.EmbedClient.Embed(ctx, hypothesis)
 	var hydeResults []db.SearchResult
 	if hydeErr == nil {
-		hydeResults, _ = e.DB.SearchVector(hydeEmb, fetchK, bookID)
+		hydeResults, hydeVecErr = e.DB.SearchVector(hydeEmb, fetchK, bookID)
+		if hydeVecErr != nil {
+			hydeResults = nil
+		}
 	}
 
 	if ftsResults == nil && vecResults == nil && hydeResults == nil {
-		return nil, fmt.Errorf("all searches failed: fts=%v, embed=%v, hyde=%v", ftsErr, embErr, hydeErr)
+		return nil, fmt.Errorf("all searches failed: fts=%v, embed=%v, vec=%v, hyde_embed=%v, hyde_vec=%v",
+			ftsErr, embErr, vecErr, hydeErr, hydeVecErr)
 	}
 
 	return e.mergeAndDiversify(query, limit, bookID, ftsResults, vecResults, hydeResults)
@@ -140,7 +149,7 @@ func (e *Engine) mergeAndDiversify(query string, limit int, bookID *int64, lists
 	}
 
 	merged := reciprocalRankFusion(mergeLimit, lists...)
-	results, err := e.enrichResults(merged, false)
+	results, err := e.enrichResults(merged)
 	if err != nil {
 		return nil, err
 	}
@@ -220,8 +229,7 @@ func EnrichWithAdjacentChunks(database *db.DB, results []Result) {
 }
 
 // enrichResults adds chunk, chapter, and book metadata to search results.
-// When fetchAdjacent is true, it also fetches prev/next chunks (same chapter only).
-func (e *Engine) enrichResults(dbResults []db.SearchResult, fetchAdjacent bool) ([]Result, error) {
+func (e *Engine) enrichResults(dbResults []db.SearchResult) ([]Result, error) {
 	results := make([]Result, 0, len(dbResults))
 	// Cache books and chapters
 	bookCache := make(map[int64]*db.Book)
@@ -252,10 +260,6 @@ func (e *Engine) enrichResults(dbResults []db.SearchResult, fetchAdjacent bool) 
 			Chapter: chapter,
 			Book:    book,
 		})
-	}
-
-	if fetchAdjacent {
-		EnrichWithAdjacentChunks(e.DB, results)
 	}
 
 	return results, nil

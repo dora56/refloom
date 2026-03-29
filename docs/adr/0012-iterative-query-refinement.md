@@ -95,7 +95,7 @@ PoC では両方を実装・比較して効果を検証する。
 ### HyDE 実装
 
 - `--hyde` フラグで LLM に仮説回答を生成 → embedding → 3-way RRF マージ (FTS + original vector + hypothesis vector)
-- `SearchHybridWithHyDE` メソッドと `reciprocalRankFusion3` で 3 ソース統合
+- `SearchHybridWithHyDE` メソッドと variadic `reciprocalRankFusion` で 3 ソース統合
 
 ### 検証結果
 

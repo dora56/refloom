@@ -68,14 +68,20 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		provider = llm.NewClaude(cfg.AnthropicAPIKey, cfg.AnthropicModel)
 	}
 
-	retrievalStart := time.Now()
-	var results []search.Result
+	// Generate hypothesis for HyDE (timed separately from retrieval)
+	var hypothesis string
 	if askHyDE {
-		// HyDE: generate hypothesis, then search with it
-		hypothesis, err := generateHypothesis(ctx, provider, query)
+		var err error
+		hypothesis, err = generateHypothesis(ctx, provider, query)
 		if err != nil {
 			return fmt.Errorf("generate hypothesis: %w", err)
 		}
+	}
+
+	retrievalStart := time.Now()
+	var results []search.Result
+	if askHyDE {
+		var err error
 		results, err = engine.SearchHybridWithHyDE(ctx, query, hypothesis, askLimit, bookIDPtr)
 		if err != nil {
 			return fmt.Errorf("hyde search: %w", err)
