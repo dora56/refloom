@@ -1,7 +1,8 @@
 # ADR-0012: 反復的クエリ書き換え
 
-- Status: Proposed
+- Status: Accepted (HyDE variant)
 - Date: 2026-03-28
+- Accepted: 2026-03-30
 - Deciders: dora56
 
 ## Context
@@ -59,8 +60,8 @@ JSON 構造化出力を保証する仕組みがない。
 
 | 選択肢 | 判定 | 理由 |
 |--------|------|------|
-| 判定統合型 1 回書き換え (最大 2 検索) | **採用** | レイテンシ抑制と精度向上のバランス |
-| HyDE (仮説回答→検索) | 要検討 | 語彙ミスマッチに強い。1 LLM 呼び出しで完結。PoC で比較検証推奨 |
+| 判定統合型 1 回書き換え (最大 2 検索) | 不採用 | HyDE が q08 を改善したため不要 |
+| HyDE (仮説回答→検索) | **採用** | 語彙ミスマッチに強い。1 LLM 呼び出しで完結。PoC で q08 改善を確認 |
 | 固定 2 回検索 (常にクエリ変換) | 不採用 | 不要な場合もレイテンシ増加 |
 | 無制限ループ | 不採用 | コスト・レイテンシの予測不可能性 |
 
@@ -86,3 +87,26 @@ PoC では両方を実装・比較して効果を検証する。
 
 - validate スコア (keyword/hybrid) への影響は `ask` のみ。search は変更なし
 - PoC で HyDE との A/B 比較を実施し、効果の高い方を本採用する
+
+## PoC 結果 (2026-03-30)
+
+**HyDE を採用。反復書き換えは不要と判断。**
+
+### HyDE 実装
+
+- `--hyde` フラグで LLM に仮説回答を生成 → embedding → 3-way RRF マージ (FTS + original vector + hypothesis vector)
+- `SearchHybridWithHyDE` メソッドと `reciprocalRankFusion3` で 3 ソース統合
+
+### 検証結果
+
+| Query | Mode | Books retrieved | 判定 |
+|-------|------|----------------|------|
+| q08 | baseline | 関数型DM, テクライ | MISS (データモデリング本なし) |
+| q08 | **hyde** | **関数型DM, テクライ, データモデリング** | **HIT** |
+| q11 | baseline | 関数型DM, テクライ, SaaS | MISS |
+| q11 | **hyde** | 関数型DM, テクライ, SaaS | MISS (チャンク品質問題) |
+
+- q08: HyDE で「データモデリングでドメインを駆動する」のチャンクを取得成功。語彙ミスマッチ解決
+- q11: 改善なし。索引・目次チャンクしか存在しないためチャンク品質の問題
+- レイテンシ: +13s (LLM 仮説生成 1 回分)。total ~28s で 60s timeout 内
+- validate スコア: keyword 9/12, hybrid 9/12 (リグレッションなし)

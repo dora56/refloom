@@ -4,6 +4,14 @@ All notable changes to Refloom.
 
 ## [Unreleased]
 
+### Added
+
+- Add adjacent chunk context expansion with `--expand-context` flag (ADR-0010)
+- Add HyDE (Hypothetical Document Embeddings) search with `--hyde` flag (ADR-0012)
+- Add binary vector quantization table and 2-phase search (ADR-0011)
+- Add cross-book query evaluation (q08/q11) to validation pipeline
+- Add source_book_coverage metric to validation scoring
+
 ## [0.2.0] - 2026-03-27
 
 ### Added

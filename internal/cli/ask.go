@@ -87,6 +87,9 @@ func runAsk(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("search: %w", err)
 		}
 	}
+	if askExpandContext {
+		search.EnrichWithAdjacentChunks(database, results)
+	}
 	retrievalMs := time.Since(retrievalStart).Milliseconds()
 
 	if len(results) == 0 {

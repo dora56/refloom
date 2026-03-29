@@ -62,7 +62,7 @@ func (e *Engine) searchFTS(query string, limit int, bookID *int64) ([]Result, er
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
-	return e.enrichResults(dbResults)
+	return e.enrichResults(dbResults, false)
 }
 
 func (e *Engine) searchVector(ctx context.Context, query string, limit int, bookID *int64) ([]Result, error) {
@@ -74,7 +74,7 @@ func (e *Engine) searchVector(ctx context.Context, query string, limit int, book
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
-	return e.enrichResults(dbResults)
+	return e.enrichResults(dbResults, false)
 }
 
 // SearchHybridWithHyDE performs hybrid search augmented with a HyDE hypothesis.
@@ -107,26 +107,7 @@ func (e *Engine) SearchHybridWithHyDE(ctx context.Context, query, hypothesis str
 		return nil, fmt.Errorf("all searches failed: fts=%v, embed=%v, hyde=%v", ftsErr, embErr, hydeErr)
 	}
 
-	// Three-way RRF merge
-	mergeLimit := limit
-	intent := DetectIntent(query)
-	if intent.IsComparison && bookID == nil {
-		mergeLimit = limit * 2
-	}
-
-	merged := reciprocalRankFusion3(ftsResults, vecResults, hydeResults, mergeLimit)
-	results, err := e.enrichResults(merged)
-	if err != nil {
-		return nil, err
-	}
-
-	if intent.IsComparison && bookID == nil {
-		results = DiversifyByBook(results, 2, limit)
-	} else if len(results) > limit {
-		results = results[:limit]
-	}
-
-	return results, nil
+	return e.mergeAndDiversify(query, limit, bookID, ftsResults, vecResults, hydeResults)
 }
 
 func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit int, bookID *int64) ([]Result, error) {
@@ -147,20 +128,23 @@ func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit i
 		return nil, fmt.Errorf("both searches failed: fts=%v, embed=%v", ftsErr, embErr)
 	}
 
-	// Reciprocal Rank Fusion — fetch more candidates for diversification
+	return e.mergeAndDiversify(query, limit, bookID, ftsResults, vecResults)
+}
+
+// mergeAndDiversify applies RRF merge and book diversification to ranked result lists.
+func (e *Engine) mergeAndDiversify(query string, limit int, bookID *int64, lists ...[]db.SearchResult) ([]Result, error) {
 	mergeLimit := limit
 	intent := DetectIntent(query)
 	if intent.IsComparison && bookID == nil {
 		mergeLimit = limit * 2 // wider candidate pool for diversification
 	}
 
-	merged := reciprocalRankFusion(ftsResults, vecResults, mergeLimit)
-	results, err := e.enrichResults(merged)
+	merged := reciprocalRankFusion(mergeLimit, lists...)
+	results, err := e.enrichResults(merged, false)
 	if err != nil {
 		return nil, err
 	}
 
-	// Apply book diversification for comparison queries (only when no book filter)
 	if intent.IsComparison && bookID == nil {
 		results = DiversifyByBook(results, 2, limit)
 	} else if len(results) > limit {
@@ -170,96 +154,84 @@ func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit i
 	return results, nil
 }
 
-// reciprocalRankFusion merges two ranked result lists using RRF.
+// reciprocalRankFusion merges ranked result lists using RRF.
 // score = sum(1 / (k + rank)) with k=60
-func reciprocalRankFusion(ftsResults, vecResults []db.SearchResult, limit int) []db.SearchResult {
+func reciprocalRankFusion(limit int, lists ...[]db.SearchResult) []db.SearchResult {
 	const k = 60.0
 	scores := make(map[int64]float64)
 
-	for rank, r := range ftsResults {
-		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
-	}
-	for rank, r := range vecResults {
-		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
+	for _, list := range lists {
+		for rank, r := range list {
+			scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
+		}
 	}
 
-	// Sort by score descending
 	type scored struct {
 		chunkID int64
 		score   float64
 	}
-	var sorted_ []scored
+	var ranked []scored
 	for id, s := range scores {
-		sorted_ = append(sorted_, scored{id, s})
+		ranked = append(ranked, scored{id, s})
 	}
-	sort.Slice(sorted_, func(i, j int) bool {
-		return sorted_[i].score > sorted_[j].score
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].score > ranked[j].score
 	})
 
-	if len(sorted_) > limit {
-		sorted_ = sorted_[:limit]
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
 	}
 
-	results := make([]db.SearchResult, len(sorted_))
-	for i, s := range sorted_ {
+	results := make([]db.SearchResult, len(ranked))
+	for i, s := range ranked {
 		results[i] = db.SearchResult{ChunkID: s.chunkID, Score: s.score}
 	}
 	return results
 }
 
-// reciprocalRankFusion3 merges three ranked result lists using RRF (k=60).
-func reciprocalRankFusion3(fts, vec, hyde []db.SearchResult, limit int) []db.SearchResult {
-	const k = 60.0
-	scores := make(map[int64]float64)
-
-	for rank, r := range fts {
-		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
-	}
-	for rank, r := range vec {
-		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
-	}
-	for rank, r := range hyde {
-		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
+// EnrichWithAdjacentChunks populates PrevChunk/NextChunk for results that already have metadata.
+func EnrichWithAdjacentChunks(database *db.DB, results []Result) {
+	seen := make(map[int64]bool)
+	for _, r := range results {
+		if r.Chunk != nil {
+			seen[r.Chunk.ChunkID] = true
+		}
 	}
 
-	type scored struct {
-		chunkID int64
-		score   float64
-	}
-	var sorted_ []scored
-	for id, s := range scores {
-		sorted_ = append(sorted_, scored{id, s})
-	}
-	sort.Slice(sorted_, func(i, j int) bool {
-		return sorted_[i].score > sorted_[j].score
-	})
+	for i := range results {
+		chunk := results[i].Chunk
+		if chunk == nil {
+			continue
+		}
 
-	if len(sorted_) > limit {
-		sorted_ = sorted_[:limit]
+		if chunk.PrevChunkID.Valid && !seen[chunk.PrevChunkID.Int64] {
+			if pc, err := database.GetChunkByID(chunk.PrevChunkID.Int64); err == nil && pc != nil && pc.ChapterID == chunk.ChapterID {
+				results[i].PrevChunk = pc
+				seen[pc.ChunkID] = true
+			}
+		}
+		if chunk.NextChunkID.Valid && !seen[chunk.NextChunkID.Int64] {
+			if nc, err := database.GetChunkByID(chunk.NextChunkID.Int64); err == nil && nc != nil && nc.ChapterID == chunk.ChapterID {
+				results[i].NextChunk = nc
+				seen[nc.ChunkID] = true
+			}
+		}
 	}
-
-	results := make([]db.SearchResult, len(sorted_))
-	for i, s := range sorted_ {
-		results[i] = db.SearchResult{ChunkID: s.chunkID, Score: s.score}
-	}
-	return results
 }
 
 // enrichResults adds chunk, chapter, and book metadata to search results.
-func (e *Engine) enrichResults(dbResults []db.SearchResult) ([]Result, error) {
+// When fetchAdjacent is true, it also fetches prev/next chunks (same chapter only).
+func (e *Engine) enrichResults(dbResults []db.SearchResult, fetchAdjacent bool) ([]Result, error) {
 	results := make([]Result, 0, len(dbResults))
 	// Cache books and chapters
 	bookCache := make(map[int64]*db.Book)
 	chapterCache := make(map[int64]*db.Chapter)
-
-	seen := make(map[int64]bool) // prevent duplicate adjacent chunk fetches
 
 	for _, r := range dbResults {
 		chunk, err := e.DB.GetChunkByID(r.ChunkID)
 		if err != nil || chunk == nil {
 			continue
 		}
-		seen[chunk.ChunkID] = true
 
 		book, ok := bookCache[chunk.BookID]
 		if !ok {
@@ -273,31 +245,19 @@ func (e *Engine) enrichResults(dbResults []db.SearchResult) ([]Result, error) {
 			chapterCache[chunk.ChapterID] = chapter
 		}
 
-		// Fetch adjacent chunks (same chapter only)
-		var prevChunk, nextChunk *db.Chunk
-		if chunk.PrevChunkID.Valid && !seen[chunk.PrevChunkID.Int64] {
-			if pc, err := e.DB.GetChunkByID(chunk.PrevChunkID.Int64); err == nil && pc != nil && pc.ChapterID == chunk.ChapterID {
-				prevChunk = pc
-				seen[pc.ChunkID] = true
-			}
-		}
-		if chunk.NextChunkID.Valid && !seen[chunk.NextChunkID.Int64] {
-			if nc, err := e.DB.GetChunkByID(chunk.NextChunkID.Int64); err == nil && nc != nil && nc.ChapterID == chunk.ChapterID {
-				nextChunk = nc
-				seen[nc.ChunkID] = true
-			}
-		}
-
 		results = append(results, Result{
-			ChunkID:   r.ChunkID,
-			Score:     r.Score,
-			PrevChunk: prevChunk,
-			Chunk:     chunk,
-			NextChunk: nextChunk,
-			Chapter:   chapter,
-			Book:      book,
+			ChunkID: r.ChunkID,
+			Score:   r.Score,
+			Chunk:   chunk,
+			Chapter: chapter,
+			Book:    book,
 		})
 	}
+
+	if fetchAdjacent {
+		EnrichWithAdjacentChunks(e.DB, results)
+	}
+
 	return results, nil
 }
 

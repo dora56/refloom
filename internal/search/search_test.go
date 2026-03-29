@@ -18,7 +18,7 @@ func TestReciprocalRankFusionMergesBothSources(t *testing.T) {
 		{ChunkID: 3, Score: 0.8},
 	}
 
-	merged := reciprocalRankFusion(fts, vec, 10)
+	merged := reciprocalRankFusion(10, fts, vec)
 
 	// ChunkID 2 appears in both → should have highest RRF score
 	if len(merged) != 3 {
@@ -39,7 +39,7 @@ func TestReciprocalRankFusionLimit(t *testing.T) {
 		{ChunkID: 4}, {ChunkID: 5},
 	}
 
-	merged := reciprocalRankFusion(fts, vec, 3)
+	merged := reciprocalRankFusion(3, fts, vec)
 	if len(merged) != 3 {
 		t.Fatalf("len = %d, want 3 (limited)", len(merged))
 	}
@@ -49,7 +49,7 @@ func TestReciprocalRankFusionFTSOnly(t *testing.T) {
 	t.Parallel()
 
 	fts := []db.SearchResult{{ChunkID: 10}, {ChunkID: 20}}
-	merged := reciprocalRankFusion(fts, nil, 10)
+	merged := reciprocalRankFusion(10, fts)
 
 	if len(merged) != 2 {
 		t.Fatalf("len = %d, want 2", len(merged))
@@ -63,7 +63,7 @@ func TestReciprocalRankFusionVectorOnly(t *testing.T) {
 	t.Parallel()
 
 	vec := []db.SearchResult{{ChunkID: 30}, {ChunkID: 40}}
-	merged := reciprocalRankFusion(nil, vec, 10)
+	merged := reciprocalRankFusion(10, vec)
 
 	if len(merged) != 2 {
 		t.Fatalf("len = %d, want 2", len(merged))
@@ -73,20 +73,20 @@ func TestReciprocalRankFusionVectorOnly(t *testing.T) {
 func TestReciprocalRankFusionBothEmpty(t *testing.T) {
 	t.Parallel()
 
-	merged := reciprocalRankFusion(nil, nil, 10)
+	merged := reciprocalRankFusion(10)
 	if len(merged) != 0 {
 		t.Fatalf("len = %d, want 0", len(merged))
 	}
 }
 
-func TestReciprocalRankFusion3MergesAllSources(t *testing.T) {
+func TestReciprocalRankFusionThreeWayMerge(t *testing.T) {
 	t.Parallel()
 
 	fts := []db.SearchResult{{ChunkID: 1}, {ChunkID: 2}}
 	vec := []db.SearchResult{{ChunkID: 2}, {ChunkID: 3}}
 	hyde := []db.SearchResult{{ChunkID: 3}, {ChunkID: 4}}
 
-	merged := reciprocalRankFusion3(fts, vec, hyde, 10)
+	merged := reciprocalRankFusion(10, fts, vec, hyde)
 
 	if len(merged) != 4 {
 		t.Fatalf("len = %d, want 4", len(merged))
@@ -98,7 +98,7 @@ func TestReciprocalRankFusion3MergesAllSources(t *testing.T) {
 	}
 }
 
-func TestReciprocalRankFusion3AllThree(t *testing.T) {
+func TestReciprocalRankFusionAllThreeLists(t *testing.T) {
 	t.Parallel()
 
 	// Item appearing in all 3 lists should rank highest
@@ -106,7 +106,7 @@ func TestReciprocalRankFusion3AllThree(t *testing.T) {
 	vec := []db.SearchResult{{ChunkID: 10}, {ChunkID: 30}}
 	hyde := []db.SearchResult{{ChunkID: 10}, {ChunkID: 40}}
 
-	merged := reciprocalRankFusion3(fts, vec, hyde, 10)
+	merged := reciprocalRankFusion(10, fts, vec, hyde)
 	if merged[0].ChunkID != 10 {
 		t.Fatalf("top ChunkID = %d, want 10 (in all 3 lists)", merged[0].ChunkID)
 	}
@@ -117,11 +117,11 @@ func TestReciprocalRankFusion3AllThree(t *testing.T) {
 	}
 }
 
-func TestReciprocalRankFusion3HydeOnly(t *testing.T) {
+func TestReciprocalRankFusionSingleList(t *testing.T) {
 	t.Parallel()
 
 	hyde := []db.SearchResult{{ChunkID: 50}, {ChunkID: 60}}
-	merged := reciprocalRankFusion3(nil, nil, hyde, 10)
+	merged := reciprocalRankFusion(10, hyde)
 	if len(merged) != 2 {
 		t.Fatalf("len = %d, want 2", len(merged))
 	}
@@ -132,7 +132,7 @@ func TestReciprocalRankFusionScoreIsPositive(t *testing.T) {
 
 	fts := []db.SearchResult{{ChunkID: 1}}
 	vec := []db.SearchResult{{ChunkID: 1}}
-	merged := reciprocalRankFusion(fts, vec, 10)
+	merged := reciprocalRankFusion(10, fts, vec)
 
 	if len(merged) != 1 {
 		t.Fatalf("len = %d, want 1", len(merged))
