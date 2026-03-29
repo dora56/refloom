@@ -77,6 +77,58 @@ func (e *Engine) searchVector(ctx context.Context, query string, limit int, book
 	return e.enrichResults(dbResults)
 }
 
+// SearchHybridWithHyDE performs hybrid search augmented with a HyDE hypothesis.
+// It runs FTS + original vector + hypothesis vector, then merges all three via RRF.
+func (e *Engine) SearchHybridWithHyDE(ctx context.Context, query, hypothesis string, limit int, bookID *int64) ([]Result, error) {
+	fetchK := limit * 3
+
+	// FTS with original query
+	expanded := ExpandQuery(query)
+	ftsResults, ftsErr := e.DB.SearchFTS(expanded, fetchK, bookID)
+	if ftsErr != nil {
+		ftsResults = nil
+	}
+
+	// Vector search with original query
+	queryEmb, embErr := e.EmbedClient.Embed(ctx, query)
+	var vecResults []db.SearchResult
+	if embErr == nil {
+		vecResults, _ = e.DB.SearchVector(queryEmb, fetchK, bookID)
+	}
+
+	// Vector search with hypothesis
+	hydeEmb, hydeErr := e.EmbedClient.Embed(ctx, hypothesis)
+	var hydeResults []db.SearchResult
+	if hydeErr == nil {
+		hydeResults, _ = e.DB.SearchVector(hydeEmb, fetchK, bookID)
+	}
+
+	if ftsResults == nil && vecResults == nil && hydeResults == nil {
+		return nil, fmt.Errorf("all searches failed: fts=%v, embed=%v, hyde=%v", ftsErr, embErr, hydeErr)
+	}
+
+	// Three-way RRF merge
+	mergeLimit := limit
+	intent := DetectIntent(query)
+	if intent.IsComparison && bookID == nil {
+		mergeLimit = limit * 2
+	}
+
+	merged := reciprocalRankFusion3(ftsResults, vecResults, hydeResults, mergeLimit)
+	results, err := e.enrichResults(merged)
+	if err != nil {
+		return nil, err
+	}
+
+	if intent.IsComparison && bookID == nil {
+		results = DiversifyByBook(results, 2, limit)
+	} else if len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
+}
+
 func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit int, bookID *int64) ([]Result, error) {
 	// Run FTS and vector search
 	expanded := ExpandQuery(query)
@@ -132,6 +184,44 @@ func reciprocalRankFusion(ftsResults, vecResults []db.SearchResult, limit int) [
 	}
 
 	// Sort by score descending
+	type scored struct {
+		chunkID int64
+		score   float64
+	}
+	var sorted_ []scored
+	for id, s := range scores {
+		sorted_ = append(sorted_, scored{id, s})
+	}
+	sort.Slice(sorted_, func(i, j int) bool {
+		return sorted_[i].score > sorted_[j].score
+	})
+
+	if len(sorted_) > limit {
+		sorted_ = sorted_[:limit]
+	}
+
+	results := make([]db.SearchResult, len(sorted_))
+	for i, s := range sorted_ {
+		results[i] = db.SearchResult{ChunkID: s.chunkID, Score: s.score}
+	}
+	return results
+}
+
+// reciprocalRankFusion3 merges three ranked result lists using RRF (k=60).
+func reciprocalRankFusion3(fts, vec, hyde []db.SearchResult, limit int) []db.SearchResult {
+	const k = 60.0
+	scores := make(map[int64]float64)
+
+	for rank, r := range fts {
+		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
+	}
+	for rank, r := range vec {
+		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
+	}
+	for rank, r := range hyde {
+		scores[r.ChunkID] += 1.0 / (k + float64(rank+1))
+	}
+
 	type scored struct {
 		chunkID int64
 		score   float64
