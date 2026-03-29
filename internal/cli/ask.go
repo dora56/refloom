@@ -109,9 +109,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build prompt and call LLM
+	// expandContextPerChunk: 3 chunks (prev+main+next) × ~400 chars each
+	const expandContextPerChunk = 1200
 	perChunk := cfg.PromptChunkLimit
-	if askExpandContext && perChunk < 1200 {
-		perChunk = 1200
+	if askExpandContext && perChunk < expandContextPerChunk {
+		perChunk = expandContextPerChunk
 	}
 	promptOpts := citation.PromptOptions{
 		Budget:        cfg.PromptBudget,

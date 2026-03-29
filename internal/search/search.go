@@ -16,6 +16,9 @@ const (
 	ModeFTS    Mode = "fts"
 	ModeVector Mode = "vector"
 	ModeHybrid Mode = "hybrid"
+
+	// fetchMultiplier controls how many extra candidates to fetch for RRF merging.
+	fetchMultiplier = 3
 )
 
 // Result represents a search result with metadata.
@@ -42,7 +45,7 @@ func NewEngine(database *db.DB, embedClient *embedding.Client) *Engine {
 
 // Search performs a search using the specified mode.
 func (e *Engine) Search(ctx context.Context, query string, limit int, mode Mode, bookID *int64) ([]Result, error) {
-	fetchK := limit * 3 // fetch more for merging
+	fetchK := limit * fetchMultiplier
 
 	switch mode {
 	case ModeFTS:
