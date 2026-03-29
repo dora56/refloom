@@ -23,6 +23,10 @@
 | [adr/0007-persistent-worker-pool.md](adr/0007-persistent-worker-pool.md) | Persistent worker pool の導入 | Accepted |
 | [adr/0008-ocr-policy-and-caching.md](adr/0008-ocr-policy-and-caching.md) | OCR ポリシーとキャッシュ | Accepted |
 | [adr/0009-embedding-parallel-batching.md](adr/0009-embedding-parallel-batching.md) | Embedding 並列バッチ | Accepted |
+| [adr/0010-adjacent-chunk-context.md](adr/0010-adjacent-chunk-context.md) | 隣接チャンクコンテキスト拡張 | Proposed |
+| [adr/0011-binary-vector-quantization.md](adr/0011-binary-vector-quantization.md) | バイナリベクトル量子化 | Proposed |
+| [adr/0012-iterative-query-refinement.md](adr/0012-iterative-query-refinement.md) | 反復的クエリ書き換え | Proposed |
+| [adr/0013-lazy-graph-rag.md](adr/0013-lazy-graph-rag.md) | LazyGraphRAG 軽量グラフ検索 | Proposed |
 
 ## What (仕様・評価) — バージョン付き
 
