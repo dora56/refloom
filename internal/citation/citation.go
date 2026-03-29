@@ -9,8 +9,9 @@ import (
 
 // PromptOptions controls prompt budget enforcement.
 type PromptOptions struct {
-	Budget   int // max total chars for the excerpt section (0 = no limit)
-	PerChunk int // max chars per chunk body (0 = no limit)
+	Budget        int  // max total chars for the excerpt section (0 = no limit)
+	PerChunk      int  // max chars per chunk body (0 = no limit)
+	ExpandContext bool // include adjacent chunks in context
 }
 
 // DefaultPromptOptions returns default budget values.
@@ -56,7 +57,20 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 		}
 		entry.WriteString("\n")
 		if r.Chunk != nil {
-			text := r.Chunk.Body
+			var text string
+			if opts.ExpandContext {
+				var parts []string
+				if r.PrevChunk != nil {
+					parts = append(parts, r.PrevChunk.Body)
+				}
+				parts = append(parts, r.Chunk.Body)
+				if r.NextChunk != nil {
+					parts = append(parts, r.NextChunk.Body)
+				}
+				text = strings.Join(parts, "\n\n")
+			} else {
+				text = r.Chunk.Body
+			}
 			if opts.PerChunk > 0 && len(text) > opts.PerChunk {
 				text = text[:opts.PerChunk] + "..."
 			}

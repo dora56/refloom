@@ -20,11 +20,13 @@ const (
 
 // Result represents a search result with metadata.
 type Result struct {
-	ChunkID int64
-	Score   float64
-	Chunk   *db.Chunk
-	Chapter *db.Chapter
-	Book    *db.Book
+	ChunkID   int64
+	Score     float64
+	PrevChunk *db.Chunk // adjacent chunk (same chapter only)
+	Chunk     *db.Chunk
+	NextChunk *db.Chunk // adjacent chunk (same chapter only)
+	Chapter   *db.Chapter
+	Book      *db.Book
 }
 
 // Engine performs hybrid search across FTS5 and vector indexes.
@@ -160,11 +162,14 @@ func (e *Engine) enrichResults(dbResults []db.SearchResult) ([]Result, error) {
 	bookCache := make(map[int64]*db.Book)
 	chapterCache := make(map[int64]*db.Chapter)
 
+	seen := make(map[int64]bool) // prevent duplicate adjacent chunk fetches
+
 	for _, r := range dbResults {
 		chunk, err := e.DB.GetChunkByID(r.ChunkID)
 		if err != nil || chunk == nil {
 			continue
 		}
+		seen[chunk.ChunkID] = true
 
 		book, ok := bookCache[chunk.BookID]
 		if !ok {
@@ -178,12 +183,29 @@ func (e *Engine) enrichResults(dbResults []db.SearchResult) ([]Result, error) {
 			chapterCache[chunk.ChapterID] = chapter
 		}
 
+		// Fetch adjacent chunks (same chapter only)
+		var prevChunk, nextChunk *db.Chunk
+		if chunk.PrevChunkID.Valid && !seen[chunk.PrevChunkID.Int64] {
+			if pc, err := e.DB.GetChunkByID(chunk.PrevChunkID.Int64); err == nil && pc != nil && pc.ChapterID == chunk.ChapterID {
+				prevChunk = pc
+				seen[pc.ChunkID] = true
+			}
+		}
+		if chunk.NextChunkID.Valid && !seen[chunk.NextChunkID.Int64] {
+			if nc, err := e.DB.GetChunkByID(chunk.NextChunkID.Int64); err == nil && nc != nil && nc.ChapterID == chunk.ChapterID {
+				nextChunk = nc
+				seen[nc.ChunkID] = true
+			}
+		}
+
 		results = append(results, Result{
-			ChunkID: r.ChunkID,
-			Score:   r.Score,
-			Chunk:   chunk,
-			Chapter: chapter,
-			Book:    book,
+			ChunkID:   r.ChunkID,
+			Score:     r.Score,
+			PrevChunk: prevChunk,
+			Chunk:     chunk,
+			NextChunk: nextChunk,
+			Chapter:   chapter,
+			Book:      book,
 		})
 	}
 	return results, nil

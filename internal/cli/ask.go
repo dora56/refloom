@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	askLimit  int
-	askBookID int64
-	askJSON   bool
+	askLimit         int
+	askBookID        int64
+	askJSON          bool
+	askExpandContext bool
 )
 
 var askCmd = &cobra.Command{
@@ -32,6 +33,7 @@ func init() {
 	askCmd.Flags().IntVar(&askLimit, "limit", 5, "Number of source chunks to use")
 	askCmd.Flags().Int64Var(&askBookID, "book", 0, "Limit to specific book ID")
 	askCmd.Flags().BoolVar(&askJSON, "json", false, "Output results as JSON")
+	askCmd.Flags().BoolVar(&askExpandContext, "expand-context", false, "Include adjacent chunks for richer context")
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
@@ -71,9 +73,14 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build prompt and call LLM
+	perChunk := cfg.PromptChunkLimit
+	if askExpandContext && perChunk < 1200 {
+		perChunk = 1200
+	}
 	promptOpts := citation.PromptOptions{
-		Budget:   cfg.PromptBudget,
-		PerChunk: cfg.PromptChunkLimit,
+		Budget:        cfg.PromptBudget,
+		PerChunk:      perChunk,
+		ExpandContext: askExpandContext,
 	}
 	system, user := citation.BuildPromptWithBudget(query, results, promptOpts)
 
