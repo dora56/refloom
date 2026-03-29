@@ -104,6 +104,117 @@ func SaveEmbeddingBatchTx(tx *sql.Tx, model string, chunkIDs []int64, embeddings
 	return nil
 }
 
+// BuildBinaryIndex creates binary quantized vectors from existing float32 embeddings.
+func (db *DB) BuildBinaryIndex() (int, error) {
+	// Clear existing binary index
+	if _, err := db.Exec("DELETE FROM chunk_vec_binary"); err != nil {
+		return 0, fmt.Errorf("clear binary index: %w", err)
+	}
+
+	// Quantize float32 → binary using sqlite-vec's built-in function
+	result, err := db.Exec(`
+		INSERT INTO chunk_vec_binary(chunk_id, embedding)
+		SELECT chunk_id, vec_quantize_binary(embedding)
+		FROM chunk_vec
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("build binary index: %w", err)
+	}
+	count, _ := result.RowsAffected()
+	return int(count), nil
+}
+
+// SearchVectorBinary performs a 2-phase search:
+// Phase 1: Binary hamming distance for fast candidate selection (limit * oversampling)
+// Phase 2: Float32 cosine re-rank of candidates for precision
+func (db *DB) SearchVectorBinary(queryEmbedding []float32, limit int, bookID *int64) ([]SearchResult, error) {
+	const oversampleFactor = 5
+
+	queryBlob, err := sqlite_vec.SerializeFloat32(queryEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("serialize query: %w", err)
+	}
+
+	candidateLimit := limit * oversampleFactor
+	if bookID != nil {
+		candidateLimit = candidateLimit * 5 // extra oversampling for book filter
+	}
+
+	// Phase 1: Binary hamming distance search
+	rows, err := db.Query(`
+		SELECT chunk_id, distance
+		FROM chunk_vec_binary
+		WHERE embedding MATCH vec_quantize_binary(?) AND k = ?
+		ORDER BY distance
+	`, queryBlob, candidateLimit)
+	if err != nil {
+		return nil, fmt.Errorf("binary search: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var candidateIDs []int64
+	for rows.Next() {
+		var chunkID int64
+		var dist float64
+		if err := rows.Scan(&chunkID, &dist); err != nil {
+			return nil, fmt.Errorf("scan binary result: %w", err)
+		}
+
+		if bookID != nil {
+			var chunkBookID int64
+			if err := db.QueryRow("SELECT book_id FROM chunk WHERE chunk_id = ?", chunkID).Scan(&chunkBookID); err != nil {
+				continue
+			}
+			if chunkBookID != *bookID {
+				continue
+			}
+		}
+
+		candidateIDs = append(candidateIDs, chunkID)
+		if bookID == nil && len(candidateIDs) >= limit*oversampleFactor {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("binary search rows: %w", err)
+	}
+
+	if len(candidateIDs) == 0 {
+		return nil, nil
+	}
+
+	// Phase 2: Re-rank candidates using float32 cosine distance
+	var results []SearchResult
+	for _, chunkID := range candidateIDs {
+		var dist float64
+		err := db.QueryRow(`
+			SELECT vec_distance_cosine(embedding, ?)
+			FROM chunk_vec
+			WHERE chunk_id = ?
+		`, queryBlob, chunkID).Scan(&dist)
+		if err != nil {
+			continue // chunk may not have float32 embedding
+		}
+		results = append(results, SearchResult{ChunkID: chunkID, Score: dist})
+	}
+
+	// Sort by cosine distance ascending (lower = more similar)
+	sortSearchResults(results)
+
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func sortSearchResults(results []SearchResult) {
+	for i := 1; i < len(results); i++ {
+		for j := i; j > 0 && results[j].Score < results[j-1].Score; j-- {
+			results[j], results[j-1] = results[j-1], results[j]
+		}
+	}
+}
+
 // SearchVector performs a KNN vector search and returns matching chunk IDs with distances.
 func (db *DB) SearchVector(queryEmbedding []float32, limit int, bookID *int64) ([]SearchResult, error) {
 	blob, err := sqlite_vec.SerializeFloat32(queryEmbedding)
