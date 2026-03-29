@@ -191,7 +191,9 @@ def main():
         print("--- Per-query ask source coverage ---")
         for pq in ask_score.get("source_book_coverage_per_query", []):
             books = ", ".join(pq.get("source_books", []))
-            print(f"  {pq['id']}: {pq['source_book_coverage']:.0f}%  [{books}]")
+            cov = pq['source_book_coverage']
+            cov_str = f"{cov:.0f}%" if cov is not None else "N/A"
+            print(f"  {pq['id']}: {cov_str}  [{books}]")
     else:
         print("Ask: no results")
 

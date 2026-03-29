@@ -181,7 +181,7 @@ func (db *DB) SearchVectorBinary(queryEmbedding []float32, limit int, bookID *in
 		}
 
 		candidateIDs = append(candidateIDs, chunkID)
-		if bookID == nil && len(candidateIDs) >= limit*oversampleFactor {
+		if len(candidateIDs) >= limit*oversampleFactor {
 			break
 		}
 	}

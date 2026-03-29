@@ -127,14 +127,18 @@ func (e *Engine) searchHybrid(ctx context.Context, query string, fetchK, limit i
 		ftsResults = nil // continue with vector only
 	}
 
+	var vecErr error
 	queryEmb, embErr := e.EmbedClient.Embed(ctx, query)
 	var vecResults []db.SearchResult
 	if embErr == nil {
-		vecResults, _ = e.DB.SearchVector(queryEmb, fetchK, bookID)
+		vecResults, vecErr = e.DB.SearchVector(queryEmb, fetchK, bookID)
+		if vecErr != nil {
+			vecResults = nil
+		}
 	}
 
 	if ftsResults == nil && vecResults == nil {
-		return nil, fmt.Errorf("both searches failed: fts=%v, embed=%v", ftsErr, embErr)
+		return nil, fmt.Errorf("both searches failed: fts=%v, embed=%v, vec=%v", ftsErr, embErr, vecErr)
 	}
 
 	return e.mergeAndDiversify(query, limit, bookID, ftsResults, vecResults)
