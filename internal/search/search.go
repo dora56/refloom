@@ -199,7 +199,7 @@ func reciprocalRankFusion(limit int, lists ...[]db.SearchResult) []db.SearchResu
 }
 
 // EnrichWithAdjacentChunks populates PrevChunk/NextChunk for results that already have metadata.
-func EnrichWithAdjacentChunks(database *db.DB, results []Result) {
+func (e *Engine) EnrichWithAdjacentChunks(results []Result) {
 	seen := make(map[int64]bool)
 	for _, r := range results {
 		if r.Chunk != nil {
@@ -214,13 +214,13 @@ func EnrichWithAdjacentChunks(database *db.DB, results []Result) {
 		}
 
 		if chunk.PrevChunkID.Valid && !seen[chunk.PrevChunkID.Int64] {
-			if pc, err := database.GetChunkByID(chunk.PrevChunkID.Int64); err == nil && pc != nil && pc.ChapterID == chunk.ChapterID {
+			if pc, err := e.DB.GetChunkByID(chunk.PrevChunkID.Int64); err == nil && pc != nil && pc.ChapterID == chunk.ChapterID {
 				results[i].PrevChunk = pc
 				seen[pc.ChunkID] = true
 			}
 		}
 		if chunk.NextChunkID.Valid && !seen[chunk.NextChunkID.Int64] {
-			if nc, err := database.GetChunkByID(chunk.NextChunkID.Int64); err == nil && nc != nil && nc.ChapterID == chunk.ChapterID {
+			if nc, err := e.DB.GetChunkByID(chunk.NextChunkID.Int64); err == nil && nc != nil && nc.ChapterID == chunk.ChapterID {
 				results[i].NextChunk = nc
 				seen[nc.ChunkID] = true
 			}

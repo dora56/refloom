@@ -96,7 +96,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if askExpandContext {
-		search.EnrichWithAdjacentChunks(database, results)
+		engine.EnrichWithAdjacentChunks(results)
 	}
 	retrievalMs := time.Since(retrievalStart).Milliseconds()
 

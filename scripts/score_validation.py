@@ -130,17 +130,17 @@ def score_ask(queries: list[dict], artifact_dir: Path) -> dict:
             )
             coverage = found / len(expected_source) * 100
         else:
-            coverage = 100.0 if not source_books else 0.0
+            coverage = None  # no expected_source_books defined; exclude from average
 
         per_query.append({
             "id": qid,
             "category": q.get("category", ""),
-            "source_book_coverage": round(coverage, 1),
+            "source_book_coverage": round(coverage, 1) if coverage is not None else None,
             "source_books": list(dict.fromkeys(source_books)),
             "expected_source_books": expected_source,
         })
 
-    coverages = [pq["source_book_coverage"] for pq in per_query]
+    coverages = [pq["source_book_coverage"] for pq in per_query if pq["source_book_coverage"] is not None]
     avg_coverage = sum(coverages) / len(coverages) if coverages else 0.0
 
     return {

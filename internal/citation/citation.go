@@ -3,6 +3,7 @@ package citation
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dora56/refloom/internal/search"
 )
@@ -72,7 +73,7 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 				text = r.Chunk.Body
 			}
 			if opts.PerChunk > 0 && len(text) > opts.PerChunk {
-				text = text[:opts.PerChunk] + "..."
+				text = truncateUTF8(text, opts.PerChunk) + "..."
 			}
 			entry.WriteString(text)
 		}
@@ -92,6 +93,18 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 	fmt.Fprintf(&sb, "\nQuestion: %s", query)
 
 	return systemPrompt, sb.String()
+}
+
+// truncateUTF8 truncates text to at most maxBytes without splitting a multi-byte rune.
+func truncateUTF8(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	// Walk back from maxBytes to find a valid rune boundary
+	for maxBytes > 0 && !utf8.RuneStart(text[maxBytes]) {
+		maxBytes--
+	}
+	return text[:maxBytes]
 }
 
 // FormatSources formats citation sources for display.

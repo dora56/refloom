@@ -106,19 +106,29 @@ func SaveEmbeddingBatchTx(tx *sql.Tx, model string, chunkIDs []int64, embeddings
 
 // BuildBinaryIndex creates binary quantized vectors from existing float32 embeddings.
 func (db *DB) BuildBinaryIndex() (int, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	// Clear existing binary index
-	if _, err := db.Exec("DELETE FROM chunk_vec_binary"); err != nil {
+	if _, err := tx.Exec("DELETE FROM chunk_vec_binary"); err != nil {
 		return 0, fmt.Errorf("clear binary index: %w", err)
 	}
 
 	// Quantize float32 → binary using sqlite-vec's built-in function
-	result, err := db.Exec(`
+	result, err := tx.Exec(`
 		INSERT INTO chunk_vec_binary(chunk_id, embedding)
 		SELECT chunk_id, vec_quantize_binary(embedding)
 		FROM chunk_vec
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("build binary index: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit binary index: %w", err)
 	}
 	count, _ := result.RowsAffected()
 	return int(count), nil
