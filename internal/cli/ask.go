@@ -69,6 +69,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate hypothesis for HyDE (timed separately from retrieval)
+	var useHyDE bool
 	var hypothesis string
 	if askHyDE {
 		var err error
@@ -76,11 +77,12 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("generate hypothesis: %w", err)
 		}
+		useHyDE = hypothesis != "" // fall back to normal search if hypothesis is empty
 	}
 
 	retrievalStart := time.Now()
 	var results []search.Result
-	if askHyDE {
+	if useHyDE {
 		var err error
 		results, err = engine.SearchHybridWithHyDE(ctx, query, hypothesis, askLimit, bookIDPtr)
 		if err != nil {
