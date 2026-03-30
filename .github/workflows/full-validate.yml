@@ -21,7 +21,7 @@ jobs:
       BOOKS_DIR_DEFAULT: ${{ vars.REFLOOM_VALIDATE_BOOKS_DIR }}
       REFLOOM_DB_PATH: ${{ runner.temp }}/refloom-full-validate-${{ github.run_id }}-${{ github.run_attempt }}.db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
