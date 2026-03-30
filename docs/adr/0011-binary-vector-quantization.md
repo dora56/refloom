@@ -1,7 +1,8 @@
 # ADR-0011: バイナリベクトル量子化
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-03-28
+- Accepted: 2026-03-30
 - Deciders: dora56
 
 ## Context
@@ -73,3 +74,11 @@ v0.2.0 時点のデータ:
 - 既存の float32 ベクトルとの互換性は完全に維持
 - `reindex` コマンドでバイナリインデックスを再構築可能
 - PoC で recall 低下の実測が必要（K*5 の oversampling 率の最適化）
+
+## PoC 結果 (2026-03-30)
+
+- validate スコア: keyword 9/12, hybrid 9/12 (リグレッションなし)
+- `chunk_vec_binary` テーブル、`BuildBinaryIndex`、`SearchVectorBinary` を実装
+- `reindex --binary` フラグで既存 DB にバイナリインデックスを後追い構築可能
+- 現スケール (6 冊, ~3,400 chunks) ではレイテンシ差は体感困難。蔵書 50 冊超で再評価
+- 検索パスへの統合は未実施 (テーブルと API のみ)。将来の hybrid 検索統合時に Phase 1 として利用

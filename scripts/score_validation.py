@@ -86,12 +86,13 @@ def score_search(queries: list[dict], artifact_dir: Path, mode: str) -> dict:
 
 
 def score_ask(queries: list[dict], artifact_dir: Path) -> dict:
-    """Score ask results."""
+    """Score ask results including source book coverage."""
     latencies = []
     retrieval_latencies = []
     generation_latencies = []
     sources_present = 0
     total = 0
+    per_query = []
 
     for q in queries:
         qid = q["id"]
@@ -119,9 +120,34 @@ def score_ask(queries: list[dict], artifact_dir: Path) -> dict:
         if generation_ms > 0:
             generation_latencies.append(float(generation_ms))
 
+        # Source book coverage
+        expected_source = q.get("expected_source_books", q.get("expected_books", []))
+        source_books = [s.get("book_title", "") for s in data.get("sources", [])]
+        if expected_source:
+            found = sum(
+                1 for eb in expected_source
+                if any(title_matches(sb, eb) for sb in source_books)
+            )
+            coverage = found / len(expected_source) * 100
+        else:
+            coverage = None  # no expected_source_books defined; exclude from average
+
+        per_query.append({
+            "id": qid,
+            "category": q.get("category", ""),
+            "source_book_coverage": round(coverage, 1) if coverage is not None else None,
+            "source_books": list(dict.fromkeys(source_books)),
+            "expected_source_books": expected_source,
+        })
+
+    coverages = [pq["source_book_coverage"] for pq in per_query if pq["source_book_coverage"] is not None]
+    avg_coverage = sum(coverages) / len(coverages) if coverages else 0.0
+
     return {
         "total": total,
         "sources_present": sources_present,
+        "source_book_coverage_avg": round(avg_coverage, 1),
+        "source_book_coverage_per_query": per_query,
         "median_total_ms": percentile(latencies, 0.5),
         "p95_total_ms": percentile(latencies, 0.95),
         "median_retrieval_ms": percentile(retrieval_latencies, 0.5),
@@ -155,10 +181,19 @@ def main():
     if ask_score["total"] > 0:
         print(f"Ask queries:      {ask_score['total']}")
         print(f"Sources present:  {ask_score['sources_present']}/{ask_score['total']}")
+        print(f"Source coverage:  {ask_score['source_book_coverage_avg']:.1f}%")
         print(f"Median total ms:  {ask_score['median_total_ms']:.0f}")
         print(f"P95 total ms:     {ask_score['p95_total_ms']:.0f}")
         print(f"Median retrieval: {ask_score['median_retrieval_ms']:.0f}ms")
         print(f"Median generation:{ask_score['median_generation_ms']:.0f}ms")
+
+        print()
+        print("--- Per-query ask source coverage ---")
+        for pq in ask_score.get("source_book_coverage_per_query", []):
+            books = ", ".join(pq.get("source_books", []))
+            cov = pq['source_book_coverage']
+            cov_str = f"{cov:.0f}%" if cov is not None else "N/A"
+            print(f"  {pq['id']}: {cov_str}  [{books}]")
     else:
         print("Ask: no results")
 

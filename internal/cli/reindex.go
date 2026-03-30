@@ -18,6 +18,7 @@ var (
 	reindexEmbedding   bool
 	reindexFTS         bool
 	reindexLinks       bool
+	reindexBinary      bool
 	reindexProfileJSON bool
 )
 
@@ -43,6 +44,7 @@ func init() {
 	reindexCmd.Flags().BoolVar(&reindexEmbedding, "embedding", false, "Regenerate embeddings only")
 	reindexCmd.Flags().BoolVar(&reindexFTS, "fts", false, "Rebuild FTS index only")
 	reindexCmd.Flags().BoolVar(&reindexLinks, "links", false, "Rebuild prev/next chunk links only")
+	reindexCmd.Flags().BoolVar(&reindexBinary, "binary", false, "Build binary vector index for fast search")
 	reindexCmd.Flags().BoolVar(&reindexProfileJSON, "profile-json", false, "Print embedding reindex profile as JSON")
 }
 
@@ -62,6 +64,17 @@ func runReindex(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("rebuild links: %w", err)
 		}
 		slog.Info("reindex complete (links)")
+		return nil
+	}
+
+	// If --binary is set, build binary vector index
+	if reindexBinary {
+		start := time.Now()
+		count, err := database.BuildBinaryIndex()
+		if err != nil {
+			return fmt.Errorf("build binary index: %w", err)
+		}
+		slog.Info("binary index built", "vectors", count, "duration", time.Since(start))
 		return nil
 	}
 

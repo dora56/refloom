@@ -213,8 +213,13 @@ if [[ -z "$SKIP_ASK" ]]; then
   # --- Step 4: Ask queries (subset) ---
   echo ""
   echo "--- Step 4: Ask ---"
-  # Use first 3 queries for ask (LLM calls are expensive)
+  # Use first 3 + cross-book queries for ask quality evaluation
   ASK_IDS=$(echo "$QUERY_IDS" | head -3)
+  for CROSS_ID in q08 q11; do
+    if echo "$QUERY_IDS" | grep -qw "$CROSS_ID" && ! echo "$ASK_IDS" | grep -qw "$CROSS_ID"; then
+      ASK_IDS="$ASK_IDS $CROSS_ID"
+    fi
+  done
 
   for qid in $ASK_IDS; do
     QUERY=$(python3 -c "import json; qs=json.load(open('$QUERY_SET')); q=[x for x in qs if x['id']=='$qid'][0]; print(q['query'])")

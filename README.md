@@ -87,7 +87,8 @@ refloom search --limit 20 "クエリ"           # 結果数指定
 ```bash
 refloom ask "この本の主要な論点は何ですか？"
 refloom ask --json "質問"                    # JSON 出力 (タイミング情報付き)
-refloom ask --provider ollama "質問"         # Ollama LLM を使用
+refloom ask --expand-context "質問"          # 前後チャンクも含めて回答 (ADR-0010)
+refloom ask --hyde "複雑な質問"              # HyDE で語彙ミスマッチを改善 (ADR-0012)
 ```
 
 ### 管理コマンド
@@ -96,6 +97,7 @@ refloom ask --provider ollama "質問"         # Ollama LLM を使用
 refloom inspect                  # DB 内の書籍一覧
 refloom delete <book_id>         # 書籍の削除
 refloom reindex                  # FTS/embedding の再構築
+refloom reindex --binary         # バイナリベクトルインデックス構築 (ADR-0011)
 refloom export --format json     # データエクスポート
 refloom doctor                   # システムヘルスチェック
 refloom config-show              # 現在の設定を表示

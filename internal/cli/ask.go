@@ -16,9 +16,11 @@ import (
 )
 
 var (
-	askLimit  int
-	askBookID int64
-	askJSON   bool
+	askLimit         int
+	askBookID        int64
+	askJSON          bool
+	askExpandContext bool
+	askHyDE          bool
 )
 
 var askCmd = &cobra.Command{
@@ -32,6 +34,8 @@ func init() {
 	askCmd.Flags().IntVar(&askLimit, "limit", 5, "Number of source chunks to use")
 	askCmd.Flags().Int64Var(&askBookID, "book", 0, "Limit to specific book ID")
 	askCmd.Flags().BoolVar(&askJSON, "json", false, "Output results as JSON")
+	askCmd.Flags().BoolVar(&askExpandContext, "expand-context", false, "Include adjacent chunks for richer context")
+	askCmd.Flags().BoolVar(&askHyDE, "hyde", false, "Use HyDE (Hypothetical Document Embeddings) for improved retrieval")
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
@@ -55,10 +59,44 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		bookIDPtr = &askBookID
 	}
 
+	// Set up LLM provider (needed before search for HyDE)
+	var provider llm.Provider
+	switch cfg.LLMProvider {
+	case "claude-cli":
+		provider = llm.NewClaudeCLI(cfg.AnthropicModel)
+	default:
+		provider = llm.NewClaude(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	}
+
+	// Generate hypothesis for HyDE (timed separately from retrieval)
+	var useHyDE bool
+	var hypothesis string
+	if askHyDE {
+		var err error
+		hypothesis, err = generateHypothesis(ctx, provider, query)
+		if err != nil {
+			return fmt.Errorf("generate hypothesis: %w", err)
+		}
+		useHyDE = hypothesis != "" // fall back to normal search if hypothesis is empty
+	}
+
 	retrievalStart := time.Now()
-	results, err := engine.Search(ctx, query, askLimit, search.ModeHybrid, bookIDPtr)
-	if err != nil {
-		return fmt.Errorf("search: %w", err)
+	var results []search.Result
+	if useHyDE {
+		var err error
+		results, err = engine.SearchHybridWithHyDE(ctx, query, hypothesis, askLimit, bookIDPtr)
+		if err != nil {
+			return fmt.Errorf("hyde search: %w", err)
+		}
+	} else {
+		var err error
+		results, err = engine.Search(ctx, query, askLimit, search.ModeHybrid, bookIDPtr)
+		if err != nil {
+			return fmt.Errorf("search: %w", err)
+		}
+	}
+	if askExpandContext {
+		engine.EnrichWithAdjacentChunks(results)
 	}
 	retrievalMs := time.Since(retrievalStart).Milliseconds()
 
@@ -71,19 +109,18 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build prompt and call LLM
+	// expandContextPerChunk: 3 chunks (prev+main+next) × ~400 chars each
+	const expandContextPerChunk = 1200
+	perChunk := cfg.PromptChunkLimit
+	if askExpandContext && perChunk < expandContextPerChunk {
+		perChunk = expandContextPerChunk
+	}
 	promptOpts := citation.PromptOptions{
-		Budget:   cfg.PromptBudget,
-		PerChunk: cfg.PromptChunkLimit,
+		Budget:        cfg.PromptBudget,
+		PerChunk:      perChunk,
+		ExpandContext: askExpandContext,
 	}
 	system, user := citation.BuildPromptWithBudget(query, results, promptOpts)
-
-	var provider llm.Provider
-	switch cfg.LLMProvider {
-	case "claude-cli":
-		provider = llm.NewClaudeCLI(cfg.AnthropicModel)
-	default:
-		provider = llm.NewClaude(cfg.AnthropicAPIKey, cfg.AnthropicModel)
-	}
 
 	genStart := time.Now()
 	answer, err := provider.Generate(ctx, system, user)
@@ -155,4 +192,13 @@ func printAskJSON(query, answer string, results []search.Result, retrievalMs, ge
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+const hydeSystemPrompt = `あなたは日本語の技術書の専門家です。
+ユーザーの質問に対して、技術書に書かれていそうな仮説的な回答を日本語で生成してください。
+実際の正確さより、関連する技術用語や概念を豊富に含むことを重視してください。
+200〜400文字程度で回答してください。`
+
+func generateHypothesis(ctx context.Context, provider llm.Provider, query string) (string, error) {
+	return provider.Generate(ctx, hydeSystemPrompt, query)
 }

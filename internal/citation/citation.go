@@ -3,14 +3,16 @@ package citation
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dora56/refloom/internal/search"
 )
 
 // PromptOptions controls prompt budget enforcement.
 type PromptOptions struct {
-	Budget   int // max total chars for the excerpt section (0 = no limit)
-	PerChunk int // max chars per chunk body (0 = no limit)
+	Budget        int  // max total chars for the excerpt section (0 = no limit)
+	PerChunk      int  // max chars per chunk body (0 = no limit)
+	ExpandContext bool // include adjacent chunks in context
 }
 
 // DefaultPromptOptions returns default budget values.
@@ -56,9 +58,22 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 		}
 		entry.WriteString("\n")
 		if r.Chunk != nil {
-			text := r.Chunk.Body
+			var text string
+			if opts.ExpandContext {
+				var parts []string
+				if r.PrevChunk != nil {
+					parts = append(parts, r.PrevChunk.Body)
+				}
+				parts = append(parts, r.Chunk.Body)
+				if r.NextChunk != nil {
+					parts = append(parts, r.NextChunk.Body)
+				}
+				text = strings.Join(parts, "\n\n")
+			} else {
+				text = r.Chunk.Body
+			}
 			if opts.PerChunk > 0 && len(text) > opts.PerChunk {
-				text = text[:opts.PerChunk] + "..."
+				text = truncateUTF8(text, opts.PerChunk) + "..."
 			}
 			entry.WriteString(text)
 		}
@@ -78,6 +93,18 @@ func BuildPromptWithBudget(query string, results []search.Result, opts PromptOpt
 	fmt.Fprintf(&sb, "\nQuestion: %s", query)
 
 	return systemPrompt, sb.String()
+}
+
+// truncateUTF8 truncates text to at most maxBytes without splitting a multi-byte rune.
+func truncateUTF8(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	// Walk back from maxBytes to find a valid rune boundary
+	for maxBytes > 0 && !utf8.RuneStart(text[maxBytes]) {
+		maxBytes--
+	}
+	return text[:maxBytes]
 }
 
 // FormatSources formats citation sources for display.

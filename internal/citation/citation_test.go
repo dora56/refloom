@@ -108,6 +108,73 @@ func TestFormatSources(t *testing.T) {
 	}
 }
 
+func TestBuildPromptWithBudgetExpandContext(t *testing.T) {
+	results := []search.Result{
+		{
+			Score:     0.9,
+			PrevChunk: &db.Chunk{Body: "Previous context paragraph."},
+			Chunk: &db.Chunk{
+				Body:      "Main content paragraph.",
+				PageStart: sql.NullInt64{Int64: 10, Valid: true},
+				PageEnd:   sql.NullInt64{Int64: 10, Valid: true},
+			},
+			NextChunk: &db.Chunk{Body: "Next context paragraph."},
+			Book:      &db.Book{Title: "Book A"},
+			Chapter:   &db.Chapter{Title: "Ch 1"},
+		},
+	}
+
+	opts := PromptOptions{Budget: 5000, PerChunk: 2000, ExpandContext: true}
+	_, user := BuildPromptWithBudget("test?", results, opts)
+
+	if !strings.Contains(user, "Previous context paragraph.") {
+		t.Error("expected prev chunk body in expanded context")
+	}
+	if !strings.Contains(user, "Main content paragraph.") {
+		t.Error("expected main chunk body in expanded context")
+	}
+	if !strings.Contains(user, "Next context paragraph.") {
+		t.Error("expected next chunk body in expanded context")
+	}
+}
+
+func TestBuildPromptWithBudgetExpandContextTruncates(t *testing.T) {
+	long := strings.Repeat("A", 500)
+	results := []search.Result{
+		{
+			PrevChunk: &db.Chunk{Body: long},
+			Chunk:     &db.Chunk{Body: long, PageStart: sql.NullInt64{Int64: 1, Valid: true}, PageEnd: sql.NullInt64{Int64: 1, Valid: true}},
+			NextChunk: &db.Chunk{Body: long},
+			Book:      &db.Book{Title: "B"},
+			Chapter:   &db.Chapter{Title: "C"},
+		},
+	}
+
+	// Combined body = 500 + 2(\n\n) + 500 + 2(\n\n) + 500 = 1504 chars. PerChunk=1200 should truncate.
+	opts := PromptOptions{Budget: 5000, PerChunk: 1200, ExpandContext: true}
+	_, user := BuildPromptWithBudget("q?", results, opts)
+
+	if !strings.Contains(user, "...") {
+		t.Error("expected truncation marker")
+	}
+}
+
+func TestBuildPromptWithBudgetExpandContextNilAdjacentChunks(t *testing.T) {
+	results := []search.Result{
+		{
+			Chunk: &db.Chunk{Body: "Only this.", PageStart: sql.NullInt64{Int64: 1, Valid: true}, PageEnd: sql.NullInt64{Int64: 1, Valid: true}},
+			Book:  &db.Book{Title: "B"},
+		},
+	}
+
+	opts := PromptOptions{Budget: 5000, PerChunk: 2000, ExpandContext: true}
+	_, user := BuildPromptWithBudget("q?", results, opts)
+
+	if !strings.Contains(user, "Only this.") {
+		t.Error("expected main chunk body even with nil adjacent")
+	}
+}
+
 func TestFormatSources_NilFields(t *testing.T) {
 	results := []search.Result{
 		{Score: 0.5},

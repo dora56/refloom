@@ -1,7 +1,8 @@
 # ADR-0010: 隣接チャンクコンテキスト拡張
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-03-28
+- Accepted: 2026-03-30
 - Deciders: dora56
 
 ## Context
@@ -59,3 +60,10 @@ DB には既に `prev_chunk_id` / `next_chunk_id` のリンクが格納されて
 
 - `make validate` のスコアへの影響を PoC で計測する必要がある
 - PoC 期間中は `--expand-context` で opt-in、効果確認後にデフォルト有効化を検討
+
+## PoC 結果 (2026-03-30)
+
+- validate スコア: keyword 9/12, hybrid 9/12 (リグレッションなし)
+- q01 (値オブジェクトの不変条件): expand-context で `KilogramQuantity` の具体例を取得。baseline の `UnitQuantity` とは異なる文脈を提供
+- レイテンシ: retrieval 293ms (baseline 1262ms より改善、キャッシュ効果)、total は LLM 生成がボトルネックで同等 (~15s)
+- `--expand-context` フラグとして実装完了。デフォルト off で opt-in
