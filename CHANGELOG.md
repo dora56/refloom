@@ -4,6 +4,8 @@ All notable changes to Refloom.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-30
+
 ### Added
 
 - Add adjacent chunk context expansion with `--expand-context` flag (ADR-0010)
