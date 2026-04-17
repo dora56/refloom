@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "PyMuPDF>=1.25",
     "ebooklib>=0.18",
-    "beautifulsoup4>=4.13",
+    "beautifulsoup4>=4.14.3",
     "pyobjc-framework-Vision>=11.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
 ]
