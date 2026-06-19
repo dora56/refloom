@@ -7,7 +7,7 @@ dependencies = [
     "ebooklib>=0.20",
     "beautifulsoup4>=4.15.0",
     "pyobjc-framework-Vision>=12.2.1; sys_platform == 'darwin'",
-    "pyobjc-framework-Quartz>=12.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=12.2.1; sys_platform == 'darwin'",
 ]
 
 [tool.pytest.ini_options]
